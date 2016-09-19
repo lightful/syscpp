@@ -8,6 +8,7 @@
 #define MYLIB_H_
 
 #include <string>
+#include <atomic>
 #include <sys++/ActorThread.hpp>
 #include "Printer.h"
 
@@ -24,16 +25,22 @@ struct ReplyA   { std::string data; ReplyA(const std::string& s)   : data(s) {} 
 struct ReplyB   { std::string data; ReplyB(const std::string& s)   : data(s) {} };
 struct Info     { std::string data; Info(const std::string& s)     : data(s) {} };
 
+struct Billing
+{
+    std::atomic<int> count; // shared message (same raw pointer accessed by two threads)
+};
+
 class MyLib : public ActorThread<MyLib>
 {
     friend ActorThread<MyLib>;
 
-    MyLib() : printer(Printer::create()) {}
+    MyLib() : printer(Printer::create()), bills(std::make_shared<Billing>()) {}
 
     template <typename Any> void onMessage(Any&);
     template <typename Any> void onTimer(const Any&);
 
     Printer::ptr printer;
+    std::shared_ptr<Billing> bills;
 
   public:
 
@@ -42,6 +49,7 @@ class MyLib : public ActorThread<MyLib>
         connect<Printer::ptr>(client);
         connect<LibraryIsTired>(client);
         connect<std::shared_ptr<Info>>(client);
+        connect<std::shared_ptr<Billing>>(client);
     }
 };
 

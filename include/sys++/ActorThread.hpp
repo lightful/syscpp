@@ -154,19 +154,25 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             return bearer;
         }
 
+        template <typename Any> inline static Channel<Any>& callback() // helper function to fetch the stored callbacks
+        {
+            const Any* nothing = nullptr;
+            return publish(*nothing, false);
+        }
+
         /* timers facility for the active object (unlimited amount: one per each "payload" instance) */
 
         enum class TimerCycle { Periodic, OneShot };
 
-        template <typename Any, typename Akin = Runnable>
-        void timerStart(const Any& payload, TimerClock::duration lapse, TimerCycle cycle, void(Akin::*event)(const Any&))
+        template <typename Any> void timerStart(const Any& payload, TimerClock::duration lapse,
+                                                Channel<Any> event, TimerCycle cycle = TimerCycle::OneShot)
         {
             std::shared_ptr<TimerEvent<Any>> timer;
             auto& allTimersOfThatType = timerEvents<Any>(this);
             auto pTimer = allTimersOfThatType.find(payload);
             if (pTimer == allTimersOfThatType.end())
             {
-                timer = std::make_shared<TimerEvent<Any>>(event, payload);
+                timer = std::make_shared<TimerEvent<Any>>(std::forward<Channel<Any>>(event), payload);
                 allTimersOfThatType.emplace(timer->payload, timer);
             }
             else // reschedule and reprogram
@@ -180,10 +186,11 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             timers.insert(timer);
         }
 
-        template <typename Any>
-        void timerStart(const Any& payload, TimerClock::duration lapse, TimerCycle cycle = TimerCycle::OneShot)
+        template <typename Any> void timerStart(const Any& payload, TimerClock::duration lapse, // invokes onTimer() methods
+                                                TimerCycle cycle = TimerCycle::OneShot)
         {
-            timerStart(payload, lapse, cycle, &Runnable::onTimer); // no "specialization after instantiation" in onTimer<T>
+            Runnable* runnable = static_cast<Runnable*>(this); // safe (a dead 'this' will not dispatch timers)
+            timerStart(payload, lapse, Channel<Any>([runnable](const Any& any) { runnable->onTimer(any); }), cycle);
         }
 
         template <typename Any> void timerReset(const Any& payload)
@@ -234,7 +241,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
         template <typename Any> struct Callback : public Parcel
         {
             Callback(Channel<Any>&& msg) : message(std::forward<Channel<Any>>(msg)) {}
-            void deliverTo(Runnable*) { const Any& fake = *((Any*)this); publish(fake, false) = std::move(message); }
+            void deliverTo(Runnable*) { callback<Any>() = std::move(message); }
             Channel<Any> message;
         };
 
@@ -262,12 +269,12 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
         template <typename Any> struct TimerEvent : public Timer
         {
-            TimerEvent(void(Runnable::*onTimer)(const Any&), const Any& data) : event(onTimer), payload(data) {}
+            TimerEvent(Channel<Any>&& fn, const Any& data) : event(std::forward<Channel<Any>>(fn)), payload(data) {}
             bool operator<(const TimerEvent<Any>& that) const { return payload < that.payload; }
             void deliverTo(Runnable* instance)
             {
                 this->shoot = true;
-                (instance->*event)(payload); // the invoked function could "touch" (shoot -> false) this very same timer
+                if (event) event(payload); // the invoked function could "touch" (shoot -> false) this very same timer
                 if (this->shoot)
                 {
                     if (this->cycle == TimerCycle::OneShot)
@@ -276,7 +283,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
                         instance->timerReschedule(this->shared_from_this());
                 }
             }
-            void(Runnable::*event)(const Any&);
+            Channel<Any> event;
             Any payload;
         };
 
@@ -370,7 +377,8 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
                     }
                     catch (const DispatchRetry& retry)
                     {
-                        timerStart(retry, retry.retryInterval, TimerCycle::OneShot, &ActorThread::retryMbox);
+                        auto retryTimer = Channel<DispatchRetry>([this](const DispatchRetry& dr) { this->retryMbox(dr); });
+                        timerStart(retry, retry.retryInterval, retryTimer);
                         ulock.lock();
                         mboxPaused = true;
                         ulock.unlock();

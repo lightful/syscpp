@@ -17,18 +17,23 @@ template <> void MyLib::onMessage(WantPrinter&)
     timerStart(std::string("faster event"), std::chrono::seconds(1), TimerCycle::Periodic); // char const* const& is ugly
     timerStart<std::string>("slower event", std::chrono::seconds(2), TimerCycle::Periodic); // alternative syntax
     timerStart(LibraryIsTired{}, std::chrono::seconds(8));
+
+    auto billingAddress = callback<std::shared_ptr<Billing>>(); // billingAddress(bill) is equivalent to publish(bill)
+    timerStart(bills, std::chrono::seconds(1), billingAddress, TimerCycle::Periodic); // periodic invocation
 }
 
 template <> void MyLib::onMessage(std::shared_ptr<RequestA>& msg)
 {
     printer->send(LINE("<MyLib> received " << msg->data));
     publish(std::make_shared<ReplyA>("reply to " + msg->data));
+    bills->count++;
 }
 
 template <> void MyLib::onMessage(std::shared_ptr<RequestB>& msg)
 {
     printer->send(LINE("<MyLib> received " << msg->data));
     publish(std::make_shared<ReplyB>("reply to " + msg->data));
+    bills->count++;
 }
 
 template <> void MyLib::onTimer(const std::string& whatEvent)
