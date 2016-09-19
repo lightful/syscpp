@@ -385,32 +385,32 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
                     }
                 }
 
-                for (;;) // timely handling of timers has precedence
+                auto firstTimer = timers.cbegin();
+                if (firstTimer == timers.cend())
                 {
-                    auto nextTimer = timers.cbegin();
-                    if (nextTimer == timers.cend())
+                    ulock.lock();
+                    if (mboxNormPri.empty() && mboxHighPri.empty() && dispatching)
                     {
-                        ulock.lock();
-                        if (!(mboxNormPri.empty() && mboxHighPri.empty() && dispatching)) break;
                         idleWaiter.notify_all();
                         messageWaiter.wait(ulock); // wait for incoming messages
-                        ulock.unlock();
                     }
-                    else
+                }
+                else
+                {
+                    auto wakeup = (*firstTimer)->deadline;
+                    if (TimerClock::now() >= wakeup)
                     {
-                        auto wakeup = (*nextTimer)->deadline;
-                        if (TimerClock::now() >= wakeup)
+                        auto timerEvent = *firstTimer; // this shared_ptr keeps it alive when self-removed from the set
+                        timerEvent->deliverTo(runnable); // here it could be self-removed (timerStop)
+                        ulock.lock();
+                    }
+                    else // the other timers are scheduled even further
+                    {
+                        ulock.lock();
+                        if ((mboxPaused || (mboxNormPri.empty() && mboxHighPri.empty())) && dispatching)
                         {
-                            auto timerEvent = *nextTimer; // this shared_ptr keeps it alive when self-removed from the set
-                            timerEvent->deliverTo(runnable); // here it could be self-removed (timerStop)
-                        }
-                        else // the other timers are scheduled even further
-                        {
-                            ulock.lock();
-                            if (!((mboxPaused || (mboxNormPri.empty() && mboxHighPri.empty())) && dispatching)) break;
                             idleWaiter.notify_all();
                             messageWaiter.wait_until(ulock, wakeup); // wait until first timer or for incoming messages
-                            ulock.unlock();
                         }
                     }
                 }
