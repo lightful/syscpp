@@ -7,6 +7,7 @@
 #include <sstream>
 #include <iostream>
 #include <chrono>
+#include <cstdlib>
 #include "Application.h"
 
 #define DURATION_SYNC  4
@@ -35,7 +36,8 @@ template <> void Task::onMessage(SyncBegin& msg)
 
 template <> void Task::onMessage(SyncMsg& msg) // sends one message after receiving another
 {
-    if (syncTestRunning) { msg.counter++; sibling->send(msg); }
+    if (syncTestRunning)
+        { msg.counter++; sibling->send(msg); }
     else
         app->send(SyncEnd{ msg.counter });
 }
@@ -122,8 +124,19 @@ template <> void Task::onMessage(BreedImplode& msg)
     // before the application ends (because the system overload) these orphan threads still
     // manage to delete their own object just before stopping (no memory is leaked):
 
-    //msg.child->waitIdle();  (thousands of threads in a handful of cores: maybe not yet returned from send()!)
-    //msg.child.reset();      (ensure the childs stopped before futher imploding)
+    // Waiting for the child idle ensures that it has returned from this method besides
+    // having notified us (thus having removed the reference to the grandchilds still
+    // pointing it and allowing an ordered top-down destruction):
+    //
+    // msg.child->waitIdle();
+
+    // However, with the current design, the following reset alone not always stops the thread,
+    // meaning that sometimes there is an additional reference to the child. So this wouldn't
+    // be enough to cause an ordered destruction unless the message is changed to use a
+    // shared_ptr wrapper for BreedImplode (such references are just the temporary copies
+    // in onMessage, which could be eliminated by using the heap):
+    //
+    // msg.child.reset();
 
     if (pendingChilds.empty())
     {
@@ -194,7 +207,10 @@ template <> void Application::onMessage(MixedStats& msg)
     {
         tStart = std::chrono::steady_clock::now();
         bool haveParameter = argc > 1;
-        snd1->send(BreedExplode { 2, 1, haveParameter? 10 : 8 }); // by default not too many (valgrind limits friendly)
+        if (haveParameter)
+            snd1->send(BreedExplode { 2, 1, std::atoi(argv[1]) > 0? std::atoi(argv[1]) : 1 });
+        else
+            snd1->send(BreedExplode { 3, 1, 5 }); // by default not too many (valgrind limits friendly)
     }
 }
 
@@ -202,7 +218,7 @@ template <> void Application::onMessage(BreedImplode& msg) // last test complete
 {
     auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - tStart).count();
     std::cout << msg.implosions << " threads created, communicated and deleted in " << elapsed << " seconds" << std::endl;
-    timerStart('H', std::chrono::milliseconds(1500)); // leave time for detached threads to stop (avoid memory leaks)
+    timerStart('H', std::chrono::milliseconds(500)); // leave time for detached threads to stop (avoid memory leaks)
 }
 
 template <> void Application::onTimer(const char&)

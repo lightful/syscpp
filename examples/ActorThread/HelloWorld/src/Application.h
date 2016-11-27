@@ -4,8 +4,8 @@
 //    (See accompanying file LICENSE_1_0.txt or copy at
 //          http://www.boost.org/LICENSE_1_0.txt)
 
-#ifndef APPLICATION_H_
-#define APPLICATION_H_
+#ifndef APPLICATION_H
+#define APPLICATION_H
 
 #include <sys++/ActorThread.hpp>
 #include "Printer.h"
@@ -26,10 +26,10 @@ class Application : public ActorThread<Application>
     void onMessage(Picture&);
     void onMessage(Money&);
     void onTimer(const int&);
-    int onStop();
+    void onStop();
 
     Printer::ptr printer;
     World::ptr world;
 };
 
-#endif /* APPLICATION_H_ */
+#endif /* APPLICATION_H */

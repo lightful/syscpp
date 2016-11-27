@@ -43,6 +43,10 @@ CXXFLAGS += $(ARCHFLAGS) $(WARNFLAGS)
 INCLUDES += $(foreach dir,$(SUBPRJS),-I$(dir)/include)
 LIBS     += $(foreach dir,$(SUBPRJS),$(wildcard $(dir)/$(BUILD_DIR)/*.a))
 
+ifdef OUT_LIB
+INCLUDES += -Iinclude
+endif
+
 HL_OK    := \e[30;42m
 HL_ERROR := \e[30;101m
 HL_CMD   := \e[35m

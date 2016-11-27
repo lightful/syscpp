@@ -48,13 +48,12 @@ void Application::onMessage(Money& msg)
 
 void Application::onTimer(const int&)
 {
-    stop(); // valid call (self-terminate request) from threads started by run()
+    stop(123); // valid call (self-terminate request) from threads started by run(); with optional exit code
 }
 
-int Application::onStop()
+void Application::onStop()
 {
     printer->send(LINE("<application> exiting"));
     printer->waitIdle();
     world.reset();
-    return 0; // exit code returned by Application::run()
 }

@@ -17,8 +17,8 @@
  - Optionally use publish() from the active object to invoke the binded callbacks
  - Optionally use timerStart() / timerStop() / timerReset() from the active object
  */
-#ifndef ACTORTHREAD_H_
-#define ACTORTHREAD_H_
+#ifndef ACTORTHREAD_HPP
+#define ACTORTHREAD_HPP
 
 #include <memory>
 #include <functional>
@@ -95,9 +95,9 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             if (!(mboxNormPri.empty() && mboxHighPri.empty())) idleWaiter.wait_until(ulock, TimerClock::now() + maxWait);
         }
 
-        void stop() // optional (suffices deleting the object): works if created by run() or invoked from ANOTHER thread
+        void stop(int code = 0) // optional call from ANOTHER thread (suffices deleting the object) or if created from run()
         {
-            stop(false);
+            if (stop(false)) exitCode = code; // return code for run() function
         }
 
         bool exiting() const // mostly to allow active objects running intensive jobs to poll for a shutdown request
@@ -143,7 +143,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
         /* methods invoked on the active object (this default implementation can be "overrided") */
 
         void onStart() {}
-        int onStop() { return 0; } // the supplied exit code is returned from run()
+        void onStop() {}
 
         /* the active object may use this family of methods to perform the callbacks onto connected clients */
 
@@ -156,7 +156,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
         template <typename Any> inline static Channel<Any>& callback() // helper function to fetch the stored callbacks
         {
-            const Any* nothing = nullptr;
+            const Any* nothing = (Any*) 1; // cheat clang's Static Analyzer
             return publish(*nothing, false);
         }
 
@@ -179,6 +179,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             {
                 timer = pTimer->second.lock();
                 timers.erase(timer);
+                timer->event = event;
             }
             timer->lapse = lapse;
             timer->cycle = cycle;
@@ -223,6 +224,9 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
         };
 
     private:
+
+        ActorThread& operator=(const ActorThread&) = delete;
+        ActorThread(const ActorThread&) = delete;
 
         struct Parcel
         {
@@ -306,7 +310,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             if (runnable->stop(true)) delete runnable; // deletion is deferred when not possible (detaching the thread)
         }
 
-        bool stop(bool forced) // return false if couldn't be properly stop
+        bool stop(bool forced) try // return false if couldn't be properly stop
         {
             if (runner.get_id() == std::this_thread::get_id()) // self-stop? (shared_ptr circular reference just broken)
             {
@@ -319,29 +323,31 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
                     }
                     dispatching = false;
                 }
+                return false;
             }
             else // normal stop invoked from another thread (or if started from run())
             {
                 std::unique_lock<std::mutex> ulock(mtx);
-                if (dispatching)
-                {
-                    dispatching = false;
-                    if (runner.joinable()) // false if dispatching from run()
-                    {
-                        messageWaiter.notify_one();
-                        ulock.unlock();
-                        try { runner.join(); } catch (...) {}
-                        return true;
-                    }
-                }
+                if (!dispatching) return true; // was already stop
+                dispatching = false;
+                bool fromCreate = runner.joinable();
+                if (!fromCreate) return true; // queues don't require and can't be cleared (potentially inside onMessage())
+                messageWaiter.notify_one();
+                ulock.unlock();
+                runner.join();
+                timers.clear();
+                mboxNormPri.clear(); // don't wait for this object deletion (the frozen queues
+                mboxHighPri.clear(); // may store shared_ptr preventing other objects deletion)
+                return true;
             }
-            return false;
         }
+        catch (...) { return false; }
 
         template <bool HighPri> void post(std::unique_ptr<Parcel>&& msg) // runs on the calling thread
         {
             auto& mbox = HighPri? mboxHighPri : mboxNormPri;
             std::lock_guard<std::mutex> lock(mtx);
+            if (!dispatching) return; // don't store anything in a frozen queue
             bool isIdle = mbox.empty();
             mbox.emplace_back(std::move(msg));
             if (HighPri) mboxPaused = false;
@@ -353,6 +359,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
         int dispatcher() // runs on the wrapped thread
         {
             id = std::this_thread::get_id();
+            exitCode = 0;
             Runnable* runnable = static_cast<Runnable*>(this);
             runnable->onStart();
             std::unique_lock<std::mutex> ulock(mtx);
@@ -417,9 +424,10 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             }
 
             ulock.unlock();
-            int exitCode = runnable->onStop();
+            runnable->onStop();
+            int code = exitCode;
             if (detached) delete runnable; // deferred self-deletion
-            return exitCode;
+            return code;
         }
 
         template <typename Key> struct PointedKeyComparator
@@ -432,8 +440,9 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
         bool dispatching;
         bool detached;
-        std::thread runner; // also makes this class non-copyable
+        std::thread runner;
         std::thread::id id;
+        int exitCode;
         mutable std::mutex mtx;
         std::condition_variable messageWaiter;
         std::condition_variable idleWaiter;
@@ -443,4 +452,4 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
         std::set<std::shared_ptr<Timer>, PointedKeyComparator<Timer>> timers; // ordered by deadline
 };
 
-#endif /* ACTORTHREAD_H_ */
+#endif /* ACTORTHREAD_HPP */

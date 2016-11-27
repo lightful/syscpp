@@ -4,8 +4,8 @@
 //    (See accompanying file LICENSE_1_0.txt or copy at
 //          http://www.boost.org/LICENSE_1_0.txt)
 
-#ifndef WORLD_H_
-#define WORLD_H_
+#ifndef WORLD_H
+#define WORLD_H
 
 #include <string>
 #include <sys++/ActorThread.hpp>
@@ -31,4 +31,4 @@ class World : public ActorThread<World>
     std::shared_ptr<class Application> app; // equivalent to ActorThread<class Application>::ptr
 };
 
-#endif /* WORLD_H_ */
+#endif /* WORLD_H */

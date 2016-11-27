@@ -4,8 +4,8 @@
 //    (See accompanying file LICENSE_1_0.txt or copy at
 //          http://www.boost.org/LICENSE_1_0.txt)
 
-#ifndef PRINTER_H_
-#define PRINTER_H_
+#ifndef PRINTER_H
+#define PRINTER_H
 
 #include <string>
 #include <sstream>
@@ -41,4 +41,4 @@ class Printer : public ActorThread<Printer> // a dedicated printing thread preve
     std::chrono::system_clock::time_point start;
 };
 
-#endif /* PRINTER_H_ */
+#endif /* PRINTER_H */

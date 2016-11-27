@@ -4,8 +4,8 @@
 //    (See accompanying file LICENSE_1_0.txt or copy at
 //          http://www.boost.org/LICENSE_1_0.txt)
 
-#ifndef APPLICATION_H_
-#define APPLICATION_H_
+#ifndef APPLICATION_H
+#define APPLICATION_H
 
 #include <random>
 #include <set>
@@ -69,8 +69,8 @@ class Application : public ActorThread<Application>
     template <typename Any> void onMessage(Any&);
     template <typename Any> void onTimer(const Any&);
 
-    int argc;
-    char **argv;
+    const int argc;
+    char** const argv;
 
     Task::ptr snd1;
     Task::ptr snd2;
@@ -79,4 +79,4 @@ class Application : public ActorThread<Application>
     int repliesCount;
 };
 
-#endif /* APPLICATION_H_ */
+#endif /* APPLICATION_H */

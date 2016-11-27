@@ -27,6 +27,8 @@ $(PATH_BIN): $(BUILD_DIR)/*.obj
 
 output_library: $(OUT_LIB)
 ! ifdef OUT_LIB
+INCLUDES = $(INCLUDES) -Iinclude
+
 $(OUT_LIB): $(BUILD_DIR)/*.obj
 	LIB /NOLOGO /VERBOSE /OUT:$(BUILD_DIR)/$(OUT_LIB) $(BUILD_DIR)/*.obj
 ! endif

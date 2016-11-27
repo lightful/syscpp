@@ -4,8 +4,8 @@
 //    (See accompanying file LICENSE_1_0.txt or copy at
 //          http://www.boost.org/LICENSE_1_0.txt)
 
-#ifndef MYLIB_H_
-#define MYLIB_H_
+#ifndef MYLIB_H
+#define MYLIB_H
 
 #include <string>
 #include <atomic>
@@ -53,4 +53,4 @@ class MyLib : public ActorThread<MyLib>
     }
 };
 
-#endif /* MYLIB_H_ */
+#endif /* MYLIB_H */
