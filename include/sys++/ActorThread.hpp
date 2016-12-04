@@ -22,6 +22,7 @@
 
 #include <memory>
 #include <functional>
+#include <tuple>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -136,7 +137,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
     protected:
 
-        explicit ActorThread() : dispatching(true), detached(false), mboxPaused(false) {}
+        explicit ActorThread() : dispatching(true), externalDispatcher(false), detached(false), mboxPaused(false) {}
 
         virtual ~ActorThread() {} // messages pending to be dispatched are discarded
 
@@ -222,6 +223,37 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             bool operator<(const DispatchRetry&) const { return false; } // enforce a single instance in the containers
             TimerClock::duration retryInterval; // will be shortened on every incoming high priority message
         };
+
+        // The following methods are exclusively intended to *interleave* the ActorThread dispatcher with another
+        // external dispatcher (e.g. Asio) which will actually be the master dispatcher having the thread control:
+        //
+        // - onWaitingEvents() must be used to request the external dispatcher to invoke handleActorEvents()
+        // - onWaitingTimer() must request the external dispatcher a delayed invocation of handleActorEvents()
+        // - onWaitingTimerCancel() must request the external dispatcher to cancel any delayed invocation
+        // - onStopping() must request the external dispatcher to end (not required a synchronous completion wait)
+
+        void acquireDispatcher() // request ActorThread to stop dispatching and invoke onDispatching()
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            externalDispatcher = true;
+            messageWaiter.notify_one();
+        }
+
+        void onDispatching() {} // run the external dispatcher from here (in case it exits, ActorThread resumes again)
+
+        void onWaitingEvents() {} // invoked from another threads (new messages coming)
+        void onWaitingTimer(TimerClock::duration); // invoked from dispatcher thread (there is only a single timer)
+        void onWaitingTimerCancel(); // invoked from dispatcher thread (will come even if the timer was not in use)
+        void onStopping() {} // invoked from another threads (mandatory handling: the object is about to be deleted)
+
+        void handleActorEvents() // this must be invoked from the external dispatcher as specified above
+        {
+            auto status = eventsLoop();
+            if (std::get<1>(status))
+                static_cast<Runnable*>(this)->onWaitingTimer(std::get<2>(status));
+            else
+                static_cast<Runnable*>(this)->onWaitingTimerCancel();
+        }
 
     private:
 
@@ -322,6 +354,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
                         detached = true;
                     }
                     dispatching = false;
+                    static_cast<Runnable*>(this)->onStopping();
                 }
                 return false;
             }
@@ -331,9 +364,10 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
                 if (!dispatching) return true; // was already stop
                 dispatching = false;
                 bool fromCreate = runner.joinable();
-                if (!fromCreate) return true; // queues don't require and can't be cleared (potentially inside onMessage())
-                messageWaiter.notify_one();
+                if (fromCreate) messageWaiter.notify_one();
                 ulock.unlock();
+                static_cast<Runnable*>(this)->onStopping();
+                if (!fromCreate) return true; // queues don't require and can't be cleared (potentially inside onMessage())
                 runner.join();
                 timers.clear();
                 mboxNormPri.clear(); // don't wait for this object deletion (the frozen queues
@@ -351,10 +385,10 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             bool isIdle = mbox.empty();
             mbox.emplace_back(std::move(msg));
             if (HighPri) mboxPaused = false;
-            if (isIdle) messageWaiter.notify_one();
+            if (!isIdle) return;
+            messageWaiter.notify_one();
+            static_cast<Runnable*>(this)->onWaitingEvents();
         }
-
-        void retryMbox(const DispatchRetry&) { mboxPaused = false; }
 
         int dispatcher() // runs on the wrapped thread
         {
@@ -362,8 +396,28 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             exitCode = 0;
             Runnable* runnable = static_cast<Runnable*>(this);
             runnable->onStart();
-            std::unique_lock<std::mutex> ulock(mtx);
+            for (;;)
+            {
+                auto status = eventsLoop();
+                if (!std::get<0>(status)) break; // dispatching == false
+                runnable->onDispatching();
+                std::lock_guard<std::mutex> lock(mtx);
+                externalDispatcher = false;
+            }
+            runnable->onStop();
+            int code = exitCode;
+            if (detached) delete runnable; // deferred self-deletion
+            return code;
+        }
 
+        void retryMbox(const DispatchRetry&) { mboxPaused = false; }
+
+        std::tuple<bool, bool, TimerClock::duration> eventsLoop()
+        {
+            bool haveTimerLapse = false;
+            TimerClock::duration timerLapse;
+            Runnable* runnable = static_cast<Runnable*>(this);
+            std::unique_lock<std::mutex> ulock(mtx);
             while (dispatching)
             {
                 bool hasHigh = !mboxHighPri.empty();
@@ -399,6 +453,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
                     if (mboxNormPri.empty() && mboxHighPri.empty() && dispatching)
                     {
                         idleWaiter.notify_all();
+                        if (externalDispatcher) break;
                         messageWaiter.wait(ulock); // wait for incoming messages
                     }
                 }
@@ -417,17 +472,18 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
                         if ((mboxPaused || (mboxNormPri.empty() && mboxHighPri.empty())) && dispatching)
                         {
                             idleWaiter.notify_all();
+                            if (externalDispatcher)
+                            {
+                                haveTimerLapse = true;
+                                timerLapse = wakeup - TimerClock::now();
+                                break;
+                            }
                             messageWaiter.wait_until(ulock, wakeup); // wait until first timer or for incoming messages
                         }
                     }
                 }
             }
-
-            ulock.unlock();
-            runnable->onStop();
-            int code = exitCode;
-            if (detached) delete runnable; // deferred self-deletion
-            return code;
+            return std::make_tuple(dispatching, haveTimerLapse, timerLapse); // take advantage of the acquired lock
         }
 
         template <typename Key> struct PointedKeyComparator
@@ -439,6 +495,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
         };
 
         bool dispatching;
+        bool externalDispatcher;
         bool detached;
         std::thread runner;
         std::thread::id id;
