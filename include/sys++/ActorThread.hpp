@@ -184,7 +184,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             }
             timer->lapse = lapse;
             timer->cycle = cycle;
-            timer->reset();
+            timer->reset(false);
             timers.insert(timer);
         }
 
@@ -199,7 +199,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
         {
             auto const& allTimersOfThatType = timerEvents<Any>(this);
             auto pTimer = allTimersOfThatType.find(payload);
-            if (pTimer != allTimersOfThatType.end()) timerReschedule(pTimer->second.lock());
+            if (pTimer != allTimersOfThatType.end()) timerReschedule(pTimer->second.lock(), false);
         }
 
         template <typename Any> void timerStop(const Any& payload)
@@ -211,7 +211,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
                 auto timer = pTimer->second.lock();
                 timers.erase(timer);
                 allTimersOfThatType.erase(pTimer);
-                if (!timer.unique()) timer->reset(); // timer "touched" signaling to dispatcher
+                if (timer.use_count() > 1) timer->reset(false); // timer "touched" signaling to dispatcher
             }
         }
 
@@ -283,12 +283,12 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
         struct Timer : public Parcel, public std::enable_shared_from_this<Timer>
         {
-            Timer() : deadline(TimerClock::now()) {}
             virtual ~Timer() {}
-            void reset()
+            void reset(bool incremental)
             {
+                if (!incremental) deadline = TimerClock::now();
                 deadline += lapse; // try keeping regular periodic intervals
-                if (deadline < TimerClock::now()) deadline = TimerClock::now() + lapse; // recover from lost events
+                if (incremental && (deadline < TimerClock::now())) deadline = TimerClock::now() + lapse; // fix lost events
                 shoot = false;
             }
             bool operator<(const Timer& that) const // ordering in containers
@@ -306,7 +306,6 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
         template <typename Any> struct TimerEvent : public Timer
         {
             TimerEvent(Channel<Any>&& fn, const Any& data) : event(std::forward<Channel<Any>>(fn)), payload(data) {}
-            bool operator<(const TimerEvent<Any>& that) const { return payload < that.payload; }
             void deliverTo(Runnable* instance)
             {
                 this->shoot = true;
@@ -316,17 +315,17 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
                     if (this->cycle == TimerCycle::OneShot)
                         instance->timerStop(payload);
                     else
-                        instance->timerReschedule(this->shared_from_this());
+                        instance->timerReschedule(this->shared_from_this(), true);
                 }
             }
             Channel<Any> event;
             Any payload;
         };
 
-        void timerReschedule(const std::shared_ptr<Timer>& timer)
+        void timerReschedule(const std::shared_ptr<Timer>& timer, bool incremental)
         {
             timers.erase(timer); // resetting will require a position change in the set nearly 100% of times
-            timer->reset();
+            timer->reset(incremental);
             timers.insert(timer); // emplaced in the new position
         }
 
