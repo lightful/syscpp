@@ -1,3 +1,6 @@
-release
-debug
-build
+release/
+debug/
+build/
+.project
+.cproject
+.settings/

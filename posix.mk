@@ -1,4 +1,4 @@
-# "Universal C++ POSIX Makefile" v2.0 for GNU make
+# "Universal C++ POSIX Makefile" v2.1 for GNU make
 
 #       Copyright Ciriaco Garcia de Celis 2011-2016.
 # Distributed under the Boost Software License, Version 1.0.
@@ -47,10 +47,15 @@ ifdef OUT_LIB
 INCLUDES += -Iinclude
 endif
 
-HL_OK    := \e[30;42m
-HL_ERROR := \e[30;101m
+ifndef MK_NOHL
+HL_DONE  := \e[30;42mDONE
+HL_ERROR := \e[30;101mERROR
 HL_CMD   := \e[35m
 HL_OFF   := \e[0m
+else
+HL_DONE  := [DONE]
+HL_ERROR := [ERROR]
+endif
 
 ifndef SUBPRJS
 MAKEACTIVE := 1
@@ -69,16 +74,20 @@ all:: whichever
 whichever::
 	@for prj in $(ALL_MK_PROJECTS); do if ! \
 		$(MAKE) -C $$prj --no-print-directory $(MAKECMDGOALS) \
-	; then echo -e "$(HL_ERROR)ERROR $$prj$(HL_OFF)" && exit 1; fi; done
+	; then echo -e "$(HL_ERROR) $$prj$(HL_OFF)" && exit 1; fi; done
 
 .PHONY: whichever all $(MAKECMDGOALS)
 
-$(foreach target, $(MAKECMDGOALS), $(eval $(target): whichever))
+$(foreach target, $(MAKECMDGOALS), $(eval $(target):: whichever))
 
 endif # DONTLOOP
 endif # SUBPRJS
 
 ifdef MAKEACTIVE
+
+ifdef MK_FULLPATH # useful for IDE diagnostic parsing without requiring to setup the build directory
+SRC_DIR := $(shell pwd)/$(SRC_DIR)
+endif
 
 SRC_SUBDIRS   := $(shell [ -d $(SRC_DIR) ] && find -L $(SRC_DIR) -type d \
                    -not \( -path $(SRC_DIR)/$(BUILD_DIR) -prune \) -not \( -name .git -prune \))
@@ -94,7 +103,7 @@ vpath %.cpp $(SRC_SUBDIRS) $(BUILD_SUBDIRS)
 .PHONY: all clean checkdirs
 
 all:: checkdirs $(PATH_BIN) $(PATH_LIB)
-	@echo -e "$(HL_OK)DONE$(HL_OFF) $(lastword $(subst /, ,$(CURDIR)))"
+	@echo -e "$(HL_DONE)$(HL_OFF) $(lastword $(subst /, ,$(CURDIR)))"
 
 clean::
 	@rm -rf $(BUILD_SUBDIRS)
