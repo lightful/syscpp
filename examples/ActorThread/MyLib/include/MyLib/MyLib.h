@@ -23,7 +23,7 @@ struct RequestA { std::string data; RequestA(const std::string& s) : data(s) {} 
 struct RequestB { std::string data; RequestB(const std::string& s) : data(s) {} };
 struct ReplyA   { std::string data; ReplyA(const std::string& s)   : data(s) {} };
 struct ReplyB   { std::string data; ReplyB(const std::string& s)   : data(s) {} };
-struct Info     { std::string data; Info(const std::string& s)     : data(s) {} };
+struct Info     { std::string data;                                             };
 
 struct Billing
 {
@@ -48,8 +48,8 @@ class MyLib : public ActorThread<MyLib>
     {
         connect<Printer::ptr>(client);
         connect<LibraryIsTired>(client);
-        connect<std::shared_ptr<Info>>(client);
-        connect<std::shared_ptr<Billing>>(client);
+        connect<std::unique_ptr<Info>>(client);
+        connect<const std::shared_ptr<Billing>>(client); // const only to fulfil the timers signature for the weird example
     }
 };
 

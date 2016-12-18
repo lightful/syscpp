@@ -18,7 +18,7 @@ template <> void MyLib::onMessage(WantPrinter&)
     timerStart<std::string>("slower event", std::chrono::seconds(2), TimerCycle::Periodic); // alternative syntax
     timerStart(LibraryIsTired{}, std::chrono::seconds(8));
 
-    auto billingAddress = callback<std::shared_ptr<Billing>>(); // billingAddress(bill) is equivalent to publish(bill)
+    auto billingAddress = callback<const std::shared_ptr<Billing>>(); // billingAddress(bill) is equivalent to publish(bill)
     timerStart(bills, std::chrono::seconds(1), billingAddress, TimerCycle::Periodic); // periodic invocation
 }
 
@@ -32,13 +32,14 @@ template <> void MyLib::onMessage(std::shared_ptr<RequestA>& msg)
 template <> void MyLib::onMessage(std::shared_ptr<RequestB>& msg)
 {
     printer->send(LINE("<MyLib> received " << msg->data));
-    publish(std::make_shared<ReplyB>("reply to " + msg->data));
+    auto reply = std::make_shared<ReplyB>("reply to " + msg->data);
+    transmit(reply); // example invalidating 'reply' (use publish() to keep this thread copy)
     bills->count++;
 }
 
 template <> void MyLib::onTimer(const std::string& whatEvent)
 {
-    publish(std::make_shared<Info>(whatEvent));
+    transmit(std::unique_ptr<Info>(new Info { whatEvent })); // publish() not usable with std::unique_ptr
 }
 
 template <> void MyLib::onTimer(const char& acter)

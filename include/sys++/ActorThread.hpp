@@ -6,15 +6,15 @@
 //          http://www.boost.org/LICENSE_1_0.txt)
 /*
  - Publicly inherit from this template (specializing it for the derived class itself)
- - On the derived (active object) class everything should be private: make the base a friend
+ - On the derived (active object) class everything should be private: make this base a friend
  - Instance the active object by invoking the inherited public static create() or run() methods
  - Use send() to send messages (of any data type) to the active object
  - Use transfer() to move messages to the active object (e.g. wrapped in unique_ptr)
  - Use onMessage(AnyType&) methods to implement the messages reception on the active object
- - Optionally build Channel objects or use a Gateway wrapper instead of send() or transfer()
+ - Optionally use a Gateway wrapper or build Channel objects instead of send() or transfer()
  - Optionally override onStart() and onStop() in the active object
  - Optionally use connect() from unknown clients to bind callbacks for any data type
- - Optionally use publish() from the active object to invoke the binded callbacks
+ - Optionally use publish() or transmit() from the active object to invoke the binded callbacks
  - Optionally use timerStart() / timerStop() / timerReset() from the active object
  */
 #ifndef ACTORTHREAD_HPP
@@ -22,6 +22,7 @@
 
 #include <memory>
 #include <functional>
+#include <type_traits>
 #include <tuple>
 #include <thread>
 #include <mutex>
@@ -60,15 +61,15 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             post<HighPri>(std::unique_ptr<Message<Any>>(new Message<Any>(std::move(msg))));
         }
 
-        template <typename Any> using Channel = std::function<void(const Any&)>;
+        template <typename Any> using Channel = std::function<void(Any&)>;
 
-        template <typename Any, bool HighPri = false> Channel<Any> getChannel() // build a generic callback
+        template <typename Any, bool HighPri = false> Channel<Any> getChannel() // build a generic movement callback
         {
-            std::weak_ptr<ActorThread> weakBind(this->shared_from_this());  // Note:
-            return Channel<Any>([weakBind](const Any& data)                 // std::bind can't store a weak_ptr
-            {                                                               // in std::function (and a shared_ptr
-                auto aliveTarget = weakBind.lock();                         // would prevent objects destruction)
-                if (aliveTarget) aliveTarget->template send<HighPri>(data);
+            std::weak_ptr<ActorThread> weakBind(this->shared_from_this());      // Note:
+            return Channel<Any>([weakBind](Any& data)                           // std::bind can't store a weak_ptr
+            {                                                                   // in std::function (and a shared_ptr
+                auto aliveTarget = weakBind.lock();                             // would prevent objects destruction)
+                if (aliveTarget) aliveTarget->template transfer<HighPri>(data);
             });
         }
 
@@ -148,17 +149,33 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
         /* the active object may use this family of methods to perform the callbacks onto connected clients */
 
-        template <typename Any> static Channel<Any>& publish(const Any& value, bool deliver = true)
+        template <typename Any> inline static void publish(Any&& value)
         {
-            static thread_local Channel<Any> bearer; // callback storage (per-thread and type)
-            if (bearer && deliver) bearer(value); // if binded with getChannel() won't call a deleted peer
-            return bearer;
+            transmit(std::move(value));
         }
 
-        template <typename Any> inline static Channel<Any>& callback() // helper function to fetch the stored callbacks
+        template <typename Any> inline static void publish(Any& value)
         {
-            const Any* nothing = (Any*) 1; // cheat clang's Static Analyzer
-            return publish(*nothing, false);
+            transmit(typename std::remove_const<Any>::type(value));
+        }
+
+        template <typename Any> inline static void transmit(Any&& value) // ownership transfer version
+        {
+            auto& bearer = callback<Any>();
+            if (bearer) bearer(value); // if binded with getChannel() won't call a deleted peer
+        }
+
+        template <typename Any> inline static void transmit(Any& value)
+        {
+            static_assert(!std::is_const<Any>::value, "must use publish() for const types");
+            auto& bearer = callback<Any>();
+            if (bearer) bearer(value);
+        }
+
+        template <typename Any> static Channel<Any>& callback() // callback storage (per-thread and type)
+        {
+            static thread_local Channel<Any> bearer; // beware that this callback moves the argument
+            return bearer;
         }
 
         /* timers facility for the active object (unlimited amount: one per each "payload" instance) */
@@ -166,14 +183,14 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
         enum class TimerCycle { Periodic, OneShot };
 
         template <typename Any> void timerStart(const Any& payload, TimerClock::duration lapse,
-                                                Channel<Any> event, TimerCycle cycle = TimerCycle::OneShot)
+                                                Channel<const Any> event, TimerCycle cycle = TimerCycle::OneShot)
         {
             std::shared_ptr<TimerEvent<Any>> timer;
             auto& allTimersOfThatType = timerEvents<Any>(this);
             auto pTimer = allTimersOfThatType.find(payload);
             if (pTimer == allTimersOfThatType.end())
             {
-                timer = std::make_shared<TimerEvent<Any>>(std::forward<Channel<Any>>(event), payload);
+                timer = std::make_shared<TimerEvent<Any>>(std::forward<Channel<const Any>>(event), payload);
                 allTimersOfThatType.emplace(timer->payload, timer);
             }
             else // reschedule and reprogram
@@ -192,7 +209,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
                                                 TimerCycle cycle = TimerCycle::OneShot)
         {
             Runnable* runnable = static_cast<Runnable*>(this); // safe (a dead 'this' will not dispatch timers)
-            timerStart(payload, lapse, Channel<Any>([runnable](const Any& any) { runnable->onTimer(any); }), cycle);
+            timerStart(payload, lapse, Channel<const Any>([runnable](const Any& any) { runnable->onTimer(any); }), cycle);
         }
 
         template <typename Any> void timerReset(const Any& payload)
@@ -305,7 +322,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
         template <typename Any> struct TimerEvent : public Timer
         {
-            TimerEvent(Channel<Any>&& fn, const Any& data) : event(std::forward<Channel<Any>>(fn)), payload(data) {}
+            TimerEvent(Channel<const Any>&& fn, const Any& p) : event(std::forward<Channel<const Any>>(fn)), payload(p) {}
             void deliverTo(Runnable* instance)
             {
                 this->shoot = true;
@@ -318,7 +335,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
                         instance->timerReschedule(this->shared_from_this(), true);
                 }
             }
-            Channel<Any> event;
+            Channel<const Any> event;
             Any payload;
         };
 
@@ -437,8 +454,8 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
                     }
                     catch (const DispatchRetry& retry)
                     {
-                        auto retryTimer = Channel<DispatchRetry>([this](const DispatchRetry& dr) { this->retryMbox(dr); });
-                        timerStart(retry, retry.retryInterval, retryTimer);
+                        auto event = Channel<const DispatchRetry>([this](const DispatchRetry& dr) { this->retryMbox(dr); });
+                        timerStart(retry, retry.retryInterval, event);
                         ulock.lock();
                         mboxPaused = true;
                         ulock.unlock();

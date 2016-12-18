@@ -19,9 +19,7 @@ void Application::onStart()
     library->connect(getChannel<std::shared_ptr<ReplyA>>());
     library->connect<std::shared_ptr<ReplyB>>(shared_from_this()); // (alternative syntax)
 
-    MyLib::Channel<WantPrinter> fnDemo = library->getChannel<WantPrinter>();
-
-    fnDemo(WantPrinter{}); // equivalent to library->send(WantPrinter{}) (but wouldn't crash if 'library' were deleted)
+    library->send(WantPrinter{});
 }
 
 template <> void Application::onMessage(Printer::ptr& msg)
@@ -29,7 +27,7 @@ template <> void Application::onMessage(Printer::ptr& msg)
     printer = msg;
 }
 
-template <> void Application::onMessage(std::shared_ptr<Info>& msg)
+template <> void Application::onMessage(std::unique_ptr<Info>& msg)
 {
     printer->send(LINE("<MyApp> received " << msg->data));
 
@@ -54,7 +52,7 @@ template <> void Application::onMessage(std::shared_ptr<ReplyB>& msg)
     printer->send(LINE("<MyApp> received " << msg->data));
 }
 
-template <> void Application::onMessage(std::shared_ptr<Billing>& msg)
+template <> void Application::onMessage(const std::shared_ptr<Billing>& msg)
 {
     printer->send(LINE("<MyApp> owes " << msg->count << " bills"));
 }
