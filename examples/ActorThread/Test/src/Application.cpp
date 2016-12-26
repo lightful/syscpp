@@ -26,7 +26,6 @@ template <> void Task::onMessage(Task::ptr& peer)
 
 template <> void Task::onMessage(SyncBegin& msg)
 {
-    syncTestRunning = true;
     if (msg.master)
     {
         timerStart('S', std::chrono::seconds(DURATION_SYNC));
@@ -36,7 +35,7 @@ template <> void Task::onMessage(SyncBegin& msg)
 
 template <> void Task::onMessage(SyncMsg& msg) // sends one message after receiving another
 {
-    if (syncTestRunning)
+    if (!syncTestCompleted)
         { msg.counter++; sibling->send(msg); }
     else
         app->send(SyncEnd{ msg.counter });
@@ -64,29 +63,27 @@ void Task::doMixed()
     if (mixedTestPaused) return;
 
     if (rnd(gen) < 5)
-        for(auto i = rnd(gen); i > 0; i--) { sibling->send(A{}); fstats.sntA++; }
+        for (auto i = rnd(gen); i >= 0; i--) { sibling->send(A{}); fstats.sntA++; }
     else
-        for(auto i = rnd(gen); i > 0; i--) { sibling->send(B{}); fstats.sntB++; }
+        for (auto i = rnd(gen); i >= 0; i--) { sibling->send(B{}); fstats.sntB++; }
 }
 
 template <> void Task::onMessage(MixedBegin&)
 {
     timerStart('A', std::chrono::seconds(DURATION_MIXED));
-    mixedTestRunning = true;
-    mixedTestPaused = false;
     doMixed();
 }
 
 template <> void Task::onMessage(A&)
 {
     fstats.recvA++;
-    if (mixedTestRunning) doMixed();
+    if (!mixedTestCompleted) doMixed();
 }
 
 template <> void Task::onMessage(B&)
 {
     fstats.recvB++;
-    if (mixedTestRunning) doMixed();
+    if (!mixedTestCompleted) doMixed();
 }
 
 template <> void Task::onMessage(MixedEnd&)
@@ -130,11 +127,10 @@ template <> void Task::onMessage(BreedImplode& msg)
     //
     // msg.child->waitIdle();
 
-    // However, with the current design, the following reset alone not always stops the thread,
-    // meaning that sometimes there is an additional reference to the child. So this wouldn't
-    // be enough to cause an ordered destruction unless the message is changed to use a
-    // shared_ptr wrapper for BreedImplode (such references are just the temporary copies
-    // in onMessage, which could be eliminated by using the heap):
+    // The following reset alone is also enough to cause an ordered destruction unless there
+    // were an additional reference to the child preventing its dead. That could have been the
+    // send() call using a intermediate variable (instead of a temporal as in this example)
+    // or a previous ActorThread implementation which did not optimized the rvalues movement:
     //
     // msg.child.reset();
 
@@ -149,11 +145,11 @@ template <> void Task::onMessage(BreedImplode& msg)
 
 template <> void Task::onTimer(const char& timer)
 {
-    if (timer == 'S') syncTestRunning = false;
+    if (timer == 'S') syncTestCompleted = true;
     else
     {
         sibling->send(MixedEnd{});
-        mixedTestRunning = false;
+        mixedTestCompleted = true;
     }
 }
 

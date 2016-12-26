@@ -23,6 +23,7 @@ wrapping a standard C++11 thread.
 * No internal strong references (only the final users determine the destruction/end)
 * Nonetheless, callbacks onto already deleted active objects do not crash the application
 
-### Supported compilers
-* Compatible with gcc (4.8 or later), clang and Visual Studio 2015
+### Minimum compiler required
+* Mininum gcc version supported is 4.9.0 (which fixed [#57172](https://gcc.gnu.org/bugzilla/show_bug.cgi?id=57172))
+* Works with clang 3.3 and Visual Studio 2015 Update 3 (no previous versions tested on both)
 * Clean, standard C++11 (no conditional code, same implementation for all platforms)

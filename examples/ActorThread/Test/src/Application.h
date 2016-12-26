@@ -33,7 +33,9 @@ class Task : public ActorThread<Task>
     friend ActorThread<Task>;
 
     Task(std::shared_ptr<class Application> parent)
-      : app(parent), gen(std::random_device{}()), rnd(0,9), fstats { 0, 0, 0, 0 }, implosions(0) {}
+      : app(parent), gen(std::random_device{}()), rnd(0,9),
+        syncTestCompleted(false), mixedTestCompleted(false), mixedTestPaused(false),
+        fstats { 0, 0, 0, 0 }, implosions(0) {}
 
     Task(Task::ptr parent) : ancestor(parent), implosions(0) {} // for breeding test
 
@@ -47,8 +49,8 @@ class Task : public ActorThread<Task>
     std::default_random_engine gen;
     std::uniform_int_distribution<int> rnd;
 
-    bool syncTestRunning;
-    bool mixedTestRunning;
+    bool syncTestCompleted;
+    bool mixedTestCompleted;
     bool mixedTestPaused;
 
     MixedStats fstats;

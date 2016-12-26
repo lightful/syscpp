@@ -8,13 +8,12 @@
  - Publicly inherit from this template (specializing it for the derived class itself)
  - On the derived (active object) class everything should be private: make this base a friend
  - Instance the active object by invoking the inherited public static create() or run() methods
- - Use send() to send messages (of any data type) to the active object
- - Use transfer() to move messages to the active object (e.g. wrapped in unique_ptr)
+ - Use send() to send or move messages (of any data type) to the active object
  - Use onMessage(AnyType&) methods to implement the messages reception on the active object
- - Optionally use a Gateway wrapper or build Channel objects instead of send() or transfer()
+ - Optionally use a Gateway wrapper or build Channel objects instead of send()
  - Optionally override onStart() and onStop() in the active object
  - Optionally use connect() from unknown clients to bind callbacks for any data type
- - Optionally use publish() or transmit() from the active object to invoke the binded callbacks
+ - Optionally use publish() from the active object to invoke the binded callbacks
  - Optionally use timerStart() / timerStop() / timerReset() from the active object
  */
 #ifndef ACTORTHREAD_HPP
@@ -22,12 +21,15 @@
 
 #include <memory>
 #include <functional>
+#include <utility>
+#include <cstddef>
 #include <type_traits>
 #include <tuple>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
 #include <chrono>
+#include <stdexcept>
 #include <deque>
 #include <set>
 #include <map>
@@ -51,14 +53,14 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             return std::make_shared<ActRunTask>(std::forward<Args>(args)...)->dispatcher();
         }
 
-        template <bool HighPri = false, typename Any> inline void send(const Any& msg) // polymorphic message passing
+        template <bool HighPri = false, typename Any> inline void send(Any& msg) // polymorphic message passing
         {
-            post<HighPri>(std::unique_ptr<Message<Any>>(new Message<Any>(msg)));
+            send(typename std::remove_const<Any>::type(msg)); // move a (non const) copy
         }
 
-        template <bool HighPri = false, typename Any> inline void transfer(Any& msg) // ownership transfer version
+        template <bool HighPri = false, typename Any> inline void send(Any&& msg)
         {
-            post<HighPri>(std::unique_ptr<Message<Any>>(new Message<Any>(std::move(msg))));
+            post<Message<Any>, HighPri>(std::forward<Any>(msg)); // gratis rvalue
         }
 
         template <typename Any> using Channel = std::function<void(Any&)>;
@@ -69,13 +71,14 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             return Channel<Any>([weakBind](Any& data)                           // std::bind can't store a weak_ptr
             {                                                                   // in std::function (and a shared_ptr
                 auto aliveTarget = weakBind.lock();                             // would prevent objects destruction)
-                if (aliveTarget) aliveTarget->template transfer<HighPri>(data);
+                if (aliveTarget)
+                    aliveTarget->template send<HighPri>(std::move(data));
             });
         }
 
         template <typename Any> void connect(Channel<Any> receiver = Channel<Any>()) // bind (or unbind) a generic callback
         {
-            post<true>(std::unique_ptr<Callback<Any>>(new Callback<Any>(std::forward<Channel<Any>>(receiver))));
+            post<Callback<Any>, true>(std::forward<Channel<Any>>(receiver));
         }
 
         template <typename Any, bool HighPri = false, typename Him> void connect(const std::shared_ptr<Him>& receiver)
@@ -112,21 +115,10 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
         {
             Gateway(const std::weak_ptr<Runnable>& actorThread = ptr()) : actor(actorThread) {}
 
-            template <bool HighPri = false, typename Any> inline void send(const Any& msg) const
+            template <typename Any> inline void operator()(Any&& msg) const // handy function-like syntax
             {
                 auto aliveTarget = get();
-                if (aliveTarget) aliveTarget->template send<HighPri>(msg);
-            }
-
-            template <bool HighPri = false, typename Any> inline void transfer(Any& msg) const
-            {
-                auto aliveTarget = get();
-                if (aliveTarget) aliveTarget->template transfer<HighPri>(msg);
-            }
-
-            template <typename Any> inline void operator()(const Any& msg) const // handy function-like syntax
-            {
-                send(msg);
+                if (aliveTarget) aliveTarget->template send<false>(std::forward<Any>(msg));
             }
 
             void set(const std::weak_ptr<Runnable>& actorThread) { actor = actorThread; }
@@ -151,25 +143,13 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
         template <typename Any> inline static void publish(Any&& value)
         {
-            transmit(std::move(value));
-        }
-
-        template <typename Any> inline static void publish(Any& value)
-        {
-            transmit(typename std::remove_const<Any>::type(value));
-        }
-
-        template <typename Any> inline static void transmit(Any&& value) // ownership transfer version
-        {
             auto& bearer = callback<Any>();
             if (bearer) bearer(value); // if binded with getChannel() won't call a deleted peer
         }
 
-        template <typename Any> inline static void transmit(Any& value)
+        template <typename Any> inline static void publish(Any& value)
         {
-            static_assert(!std::is_const<Any>::value, "must use publish() for const types");
-            auto& bearer = callback<Any>();
-            if (bearer) bearer(value);
+            publish(typename std::remove_const<Any>::type(value));
         }
 
         template <typename Any> static Channel<Any>& callback() // callback storage (per-thread and type)
@@ -197,12 +177,12 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             {
                 timer = pTimer->second.lock();
                 timers.erase(timer);
-                timer->event = event;
+                timer->event = std::move(event);
             }
             timer->lapse = lapse;
             timer->cycle = cycle;
             timer->reset(false);
-            timers.insert(timer);
+            timers.insert(std::move(timer));
         }
 
         template <typename Any> void timerStart(const Any& payload, TimerClock::duration lapse, // invokes onTimer() methods
@@ -285,7 +265,6 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
         template <typename Any> struct Message : public Parcel // wraps any type
         {
-            Message(const Any& msg) : message(msg) {}
             Message(Any&& msg) : message(std::forward<Any>(msg)) {}
             void deliverTo(Runnable* instance) { instance->onMessage(message); }
             Any message;
@@ -339,11 +318,11 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             Any payload;
         };
 
-        void timerReschedule(const std::shared_ptr<Timer>& timer, bool incremental)
+        void timerReschedule(std::shared_ptr<Timer>&& timer, bool incremental)
         {
             timers.erase(timer); // resetting will require a position change in the set nearly 100% of times
             timer->reset(incremental);
-            timers.insert(timer); // emplaced in the new position
+            timers.insert(std::move(timer)); // emplaced in the new position
         }
 
         template <typename Any> static std::map<Any, std::weak_ptr<TimerEvent<Any>>>& timerEvents(ActorThread* caller)
@@ -393,13 +372,13 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
         }
         catch (...) { return false; }
 
-        template <bool HighPri> void post(std::unique_ptr<Parcel>&& msg) // runs on the calling thread
+        template <typename Parcelable, bool HighPri, typename Any> void post(Any&& msg) // runs on the calling thread
         {
             auto& mbox = HighPri? mboxHighPri : mboxNormPri;
             std::lock_guard<std::mutex> lock(mtx);
             if (!dispatching) return; // don't store anything in a frozen queue
             bool isIdle = mbox.empty();
-            mbox.emplace_back(std::move(msg));
+            mbox.emplace_back(new Parcelable(std::forward<Any>(msg)));
             if (HighPri) mboxPaused = false;
             if (!isIdle) return;
             messageWaiter.notify_one();
@@ -455,7 +434,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
                     catch (const DispatchRetry& retry)
                     {
                         auto event = Channel<const DispatchRetry>([this](const DispatchRetry& dr) { this->retryMbox(dr); });
-                        timerStart(retry, retry.retryInterval, event);
+                        timerStart(retry, retry.retryInterval, std::move(event));
                         ulock.lock();
                         mboxPaused = true;
                         ulock.unlock();
