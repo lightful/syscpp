@@ -60,7 +60,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
         template <bool HighPri = false, typename Any> inline void send(Any&& msg)
         {
-            post<Message<Any>, HighPri>(std::forward<Any>(msg)); // gratis rvalue
+            post<ActorMessage<Any>, HighPri>(std::forward<Any>(msg)); // gratis rvalue
         }
 
         template <typename Any> using Channel = std::function<void(Any&)>;
@@ -78,7 +78,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
         template <typename Any> void connect(Channel<Any> receiver = Channel<Any>()) // bind (or unbind) a generic callback
         {
-            post<Callback<Any>, true>(std::forward<Channel<Any>>(receiver));
+            post<ActorCallback<Any>, true>(std::forward<Channel<Any>>(receiver));
         }
 
         template <typename Any, bool HighPri = false, typename Him> void connect(const std::shared_ptr<Him>& receiver)
@@ -165,12 +165,12 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
         template <typename Any> void timerStart(const Any& payload, TimerClock::duration lapse,
                                                 Channel<const Any> event, TimerCycle cycle = TimerCycle::OneShot)
         {
-            std::shared_ptr<TimerEvent<Any>> timer;
+            std::shared_ptr<ActorAlarm<Any>> timer;
             auto& allTimersOfThatType = timerEvents<Any>(this);
             auto pTimer = allTimersOfThatType.find(payload);
             if (pTimer == allTimersOfThatType.end())
             {
-                timer = std::make_shared<TimerEvent<Any>>(std::forward<Channel<const Any>>(event), payload);
+                timer = std::make_shared<ActorAlarm<Any>>(std::forward<Channel<const Any>>(event), payload);
                 allTimersOfThatType.emplace(timer->payload, timer);
             }
             else // reschedule and reprogram
@@ -257,29 +257,29 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
         ActorThread& operator=(const ActorThread&) = delete;
         ActorThread(const ActorThread&) = delete;
 
-        struct Parcel
+        struct ActorParcel
         {
-            virtual ~Parcel() {}
+            virtual ~ActorParcel() {}
             virtual void deliverTo(Runnable* instance) = 0;
         };
 
-        template <typename Any> struct Message : public Parcel // wraps any type
+        template <typename Any> struct ActorMessage : public ActorParcel // wraps any type
         {
-            Message(Any&& msg) : message(std::forward<Any>(msg)) {}
+            ActorMessage(Any&& msg) : message(std::forward<Any>(msg)) {}
             void deliverTo(Runnable* instance) { instance->onMessage(message); }
             Any message;
         };
 
-        template <typename Any> struct Callback : public Parcel
+        template <typename Any> struct ActorCallback : public ActorParcel
         {
-            Callback(Channel<Any>&& msg) : message(std::forward<Channel<Any>>(msg)) {}
+            ActorCallback(Channel<Any>&& msg) : message(std::forward<Channel<Any>>(msg)) {}
             void deliverTo(Runnable*) { callback<Any>() = std::move(message); }
             Channel<Any> message;
         };
 
-        struct Timer : public Parcel, public std::enable_shared_from_this<Timer>
+        struct ActorTimer : public ActorParcel, public std::enable_shared_from_this<ActorTimer>
         {
-            virtual ~Timer() {}
+            virtual ~ActorTimer() {}
             void reset(bool incremental)
             {
                 if (!incremental) deadline = TimerClock::now();
@@ -287,7 +287,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
                 if (incremental && (deadline < TimerClock::now())) deadline = TimerClock::now() + lapse; // fix lost events
                 shoot = false;
             }
-            bool operator<(const Timer& that) const // ordering in containers
+            bool operator<(const ActorTimer& that) const // ordering in containers
             {
                 if (deadline < that.deadline) return true;
                 else if (that.deadline < deadline) return false;
@@ -299,9 +299,9 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             bool shoot;
         };
 
-        template <typename Any> struct TimerEvent : public Timer
+        template <typename Any> struct ActorAlarm : public ActorTimer
         {
-            TimerEvent(Channel<const Any>&& fn, const Any& p) : event(std::forward<Channel<const Any>>(fn)), payload(p) {}
+            ActorAlarm(Channel<const Any>&& fn, const Any& p) : event(std::forward<Channel<const Any>>(fn)), payload(p) {}
             void deliverTo(Runnable* instance)
             {
                 this->shoot = true;
@@ -318,17 +318,17 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             Any payload;
         };
 
-        void timerReschedule(std::shared_ptr<Timer>&& timer, bool incremental)
+        void timerReschedule(std::shared_ptr<ActorTimer>&& timer, bool incremental)
         {
             timers.erase(timer); // resetting will require a position change in the set nearly 100% of times
             timer->reset(incremental);
             timers.insert(std::move(timer)); // emplaced in the new position
         }
 
-        template <typename Any> static std::map<Any, std::weak_ptr<TimerEvent<Any>>>& timerEvents(ActorThread* caller)
+        template <typename Any> static std::map<Any, std::weak_ptr<ActorAlarm<Any>>>& timerEvents(ActorThread* caller)
         {
             if (caller->id != std::this_thread::get_id()) throw std::runtime_error("timer setup outside its owning thread");
-            static thread_local std::map<Any, std::weak_ptr<TimerEvent<Any>>> info; // storage
+            static thread_local std::map<Any, std::weak_ptr<ActorAlarm<Any>>> info; // storage
             return info;
         }
 
@@ -481,7 +481,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             return std::make_tuple(dispatching, haveTimerLapse, timerLapse); // take advantage of the acquired lock
         }
 
-        template <typename Key> struct PointedKeyComparator
+        template <typename Key> struct ActorPointedKeyComparator
         {
             inline bool operator()(const std::shared_ptr<Key>& key1, const std::shared_ptr<Key>& key2) const
             {
@@ -498,10 +498,10 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
         mutable std::mutex mtx;
         std::condition_variable messageWaiter;
         std::condition_variable idleWaiter;
-        std::deque<std::unique_ptr<Parcel>> mboxNormPri;
-        std::deque<std::unique_ptr<Parcel>> mboxHighPri;
+        std::deque<std::unique_ptr<ActorParcel>> mboxNormPri;
+        std::deque<std::unique_ptr<ActorParcel>> mboxHighPri;
         bool mboxPaused;
-        std::set<std::shared_ptr<Timer>, PointedKeyComparator<Timer>> timers; // ordered by deadline
+        std::set<std::shared_ptr<ActorTimer>, ActorPointedKeyComparator<ActorTimer>> timers; // ordered by deadline
 };
 
 #endif /* ACTORTHREAD_HPP */
