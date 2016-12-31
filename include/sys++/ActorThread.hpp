@@ -339,9 +339,10 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
         bool stop(bool forced) try // return false if couldn't be properly stop
         {
+            std::unique_lock<std::mutex> ulock(mtx);
             if (runner.get_id() == std::this_thread::get_id()) // self-stop? (shared_ptr circular reference just broken)
             {
-                if (forced && dispatching) // no mutex acquired (could be already locked by oneself!)
+                if (forced && dispatching)
                 {
                     if (runner.joinable())
                     {
@@ -349,13 +350,13 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
                         detached = true;
                     }
                     dispatching = false;
+                    ulock.unlock();
                     static_cast<Runnable*>(this)->onStopping();
                 }
                 return false;
             }
             else // normal stop invoked from another thread (or if started from run())
             {
-                std::unique_lock<std::mutex> ulock(mtx);
                 if (!dispatching) return true; // was already stop
                 dispatching = false;
                 bool fromCreate = runner.joinable();
@@ -426,8 +427,10 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
                     try
                     {
-                        mbox.front()->deliverTo(runnable); // queue iterator valid through insertions
-                        ulock.lock();
+                        auto& msg = mbox.front(); // queue iterator valid through insertions
+                        msg->deliverTo(runnable);
+                        msg.reset();              // delete the argument before getting the lock (prevent a self-lock
+                        ulock.lock();             // if that object sends a message to this thread from its destructor)
                         mbox.pop_front();
                         ulock.unlock();
                     }
