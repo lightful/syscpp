@@ -55,7 +55,8 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
         template <bool HighPri = false, typename Any> inline void send(Any& msg) // polymorphic message passing
         {
-            send(typename std::remove_const<Any>::type(msg)); // move a (non const) copy
+            auto tmp = typename std::remove_const<Any>::type(msg); // move a (non const) copy
+            send(std::move(tmp));
         }
 
         template <bool HighPri = false, typename Any> inline void send(Any&& msg)
@@ -149,7 +150,8 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
         template <typename Any> inline static void publish(Any& value)
         {
-            publish(typename std::remove_const<Any>::type(value));
+            auto tmp = typename std::remove_const<Any>::type(value);
+            publish(std::move(tmp));
         }
 
         template <typename Any> static Channel<Any>& callback() // callback storage (per-thread and type)

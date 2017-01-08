@@ -12,7 +12,7 @@ checkdirs:
 	@if NOT EXIST $(BUILD_DIR) mkdir $(BUILD_DIR)
 
 {$(SRC_DIR)}.cpp{$(BUILD_DIR)}.obj::
-	$(CC) -nologo $(INCLUDES) -c /W4 /EHsc /Fo$(BUILD_DIR)/ $<
+	$(CC) -nologo $(INCLUDES) -c /Za /O2 /W4 /EHsc /Fo$(BUILD_DIR)/ $<
 
 subprojects:
 ! ifdef SUBPRJS
