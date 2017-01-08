@@ -1,6 +1,6 @@
 // Active Object pattern wrapping a standard C++11 thread (https://github.com/lightful/syscpp)
 //
-//         Copyright Ciriaco Garcia de Celis 2016.
+//       Copyright Ciriaco Garcia de Celis 2016-2017.
 // Distributed under the Boost Software License, Version 1.0.
 //    (See accompanying file LICENSE_1_0.txt or copy at
 //          http://www.boost.org/LICENSE_1_0.txt)
@@ -34,15 +34,18 @@
 #include <set>
 #include <map>
 
-template <typename Runnable> class ActorThread : public std::enable_shared_from_this<Runnable>
+template <typename Runnable> class ActorThread
 {
     public:
 
         typedef std::shared_ptr<Runnable> ptr;
 
+        std::weak_ptr<Runnable> weak_from_this() const noexcept { return weak_this; } // shared_from_this() would be unsafe
+
         template <typename ... Args> static ptr create(Args&&... args) // spawn a new thread
         {
             auto task = ptr(new Runnable(std::forward<Args>(args)...), actorThreadRecycler);
+            task->weak_this = task;
             task->runner = std::thread(&ActorThread::dispatcher, task.get());
             return task;
         }
@@ -50,7 +53,9 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
         template <typename ... Args> static int run(Args&&... args) // run in the calling thread (e.g. main() thread)
         {
             struct ActRunTask : public Runnable { ActRunTask(Args&&... arg) : Runnable(std::forward<Args>(arg)...) {} };
-            return std::make_shared<ActRunTask>(std::forward<Args>(args)...)->dispatcher();
+            auto task = std::make_shared<ActRunTask>(std::forward<Args>(args)...);
+            task->weak_this = task;
+            return task->dispatcher();
         }
 
         template <bool HighPri = false, typename Any> inline void send(Any& msg) // polymorphic message passing
@@ -66,12 +71,12 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
         template <typename Any> using Channel = std::function<void(Any&)>;
 
-        template <typename Any, bool HighPri = false> Channel<Any> getChannel() // build a generic movement callback
+        template <typename Any, bool HighPri = false> Channel<Any> getChannel() const // build a generic movement callback
         {
-            std::weak_ptr<ActorThread> weakBind(this->shared_from_this());      // Note:
-            return Channel<Any>([weakBind](Any& data)                           // std::bind can't store a weak_ptr
-            {                                                                   // in std::function (and a shared_ptr
-                auto aliveTarget = weakBind.lock();                             // would prevent objects destruction)
+            std::weak_ptr<ActorThread> weakBind(this->weak_from_this()); // Note:
+            return Channel<Any>([weakBind](Any& data)                    // std::bind can't store a weak_ptr
+            {                                                            // in std::function (and a shared_ptr
+                auto aliveTarget = weakBind.lock();                      // would prevent objects destruction)
                 if (aliveTarget)
                     aliveTarget->template send<HighPri>(std::move(data));
             });
@@ -82,9 +87,10 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             post<ActorCallback<Any>, true>(std::move(receiver));
         }
 
-        template <typename Any, bool HighPri = false, typename Him> void connect(const std::shared_ptr<Him>& receiver)
+        template <typename Any, bool HighPri = false, typename Him> void connect(const std::weak_ptr<Him>& receiver)
         {
-            connect(receiver->template getChannel<Any, HighPri>()); // bind another ActorThread
+            auto aliveTarget = receiver.lock();
+            if (aliveTarget) connect(aliveTarget->template getChannel<Any, HighPri>()); // bind another ActorThread
         }
 
         std::size_t pendingMessages() const // amount of undispatched messages in the active object
@@ -243,7 +249,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
         void onWaitingEvents() {} // invoked from another threads (new messages coming)
         void onWaitingTimer(TimerClock::duration); // invoked from dispatcher thread (there is only a single timer)
         void onWaitingTimerCancel(); // invoked from dispatcher thread (will come even if the timer was not in use)
-        void onStopping() {} // invoked from another threads (mandatory handling: the object is about to be deleted)
+        void onStopping() {} // invoked from another threads (mandatory handling: the object could be about to be deleted)
 
         void handleActorEvents() // this must be invoked from the external dispatcher as specified above
         {
@@ -342,9 +348,9 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
         bool stop(bool forced) try // return false if couldn't be properly stop
         {
             std::unique_lock<std::mutex> ulock(mtx);
-            if (runner.get_id() == std::this_thread::get_id()) // self-stop? (shared_ptr circular reference just broken)
+            if (runner.get_id() == std::this_thread::get_id()) // self-stop?
             {
-                if (forced && dispatching)
+                if (forced && dispatching) // from delete? (shared_ptr circular reference just broken)
                 {
                     if (runner.joinable())
                     {
@@ -496,6 +502,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
         bool dispatching;
         bool externalDispatcher;
         bool detached;
+        mutable std::weak_ptr<Runnable> weak_this;
         std::thread runner;
         std::thread::id id;
         int exitCode;

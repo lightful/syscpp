@@ -1,5 +1,5 @@
 
-//         Copyright Ciriaco Garcia de Celis 2016.
+//       Copyright Ciriaco Garcia de Celis 2016-2017.
 // Distributed under the Boost Software License, Version 1.0.
 //    (See accompanying file LICENSE_1_0.txt or copy at
 //          http://www.boost.org/LICENSE_1_0.txt)
@@ -14,10 +14,10 @@ int main(int argc, char** argv)
 
 void Application::onStart()
 {
-    library->basicSubscriptions(shared_from_this()); // all except ReplyA and ReplyB
+    library->basicSubscriptions(weak_from_this()); // all except ReplyA and ReplyB
 
     library->connect(getChannel<std::shared_ptr<ReplyA>>());
-    library->connect<std::shared_ptr<ReplyB>>(shared_from_this()); // (alternative syntax)
+    library->connect<std::shared_ptr<ReplyB>>(weak_from_this()); // (alternative syntax)
 
     library->send(WantPrinter{});
 }

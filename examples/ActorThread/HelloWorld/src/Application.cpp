@@ -1,5 +1,5 @@
 
-//         Copyright Ciriaco Garcia de Celis 2016.
+//       Copyright Ciriaco Garcia de Celis 2016-2017.
 // Distributed under the Boost Software License, Version 1.0.
 //    (See accompanying file LICENSE_1_0.txt or copy at
 //          http://www.boost.org/LICENSE_1_0.txt)
@@ -8,7 +8,7 @@
 
 int main(int argc, char** argv)
 {
-    return Application::run(argc, argv);
+    return Application::run(argc, argv); // blocking call (Application::weak_from_this() will not expire until stop())
 }
 
 Application::Application(int /*argc*/, char** /*argv*/)
@@ -20,7 +20,7 @@ void Application::onStart()
     printer = Printer::create();
     printer->send(LINE("<application> print test page"));
 
-    world = World::create(shared_from_this());
+    world = World::create(weak_from_this().lock()); // lock() returns a non empty reference (see comment in main())
     world->send(printer);
 
     world->send(2016);

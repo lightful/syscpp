@@ -1,5 +1,5 @@
 
-//         Copyright Ciriaco Garcia de Celis 2016.
+//       Copyright Ciriaco Garcia de Celis 2016-2017.
 // Distributed under the Boost Software License, Version 1.0.
 //    (See accompanying file LICENSE_1_0.txt or copy at
 //          http://www.boost.org/LICENSE_1_0.txt)
@@ -10,9 +10,9 @@
 #include <cstdlib>
 #include "Application.h"
 
-#define DURATION_SYNC  4
-#define DURATION_ASYNC 1
-#define DURATION_MIXED 3
+#define DURATION_SYNC  std::chrono::seconds(4)
+#define DURATION_ASYNC std::chrono::milliseconds(250)
+#define DURATION_MIXED std::chrono::seconds(3)
 
 int main(int argc, char **argv)
 {
@@ -28,7 +28,7 @@ template <> void Task::onMessage(SyncBegin& msg)
 {
     if (msg.master)
     {
-        timerStart('S', std::chrono::seconds(DURATION_SYNC));
+        timerStart('S', DURATION_SYNC);
         sibling->send(SyncMsg{ 1 });
     }
 }
@@ -43,7 +43,7 @@ template <> void Task::onMessage(SyncMsg& msg) // sends one message after receiv
 
 template <> void Task::onMessage(AsyncBegin&)
 {
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(DURATION_ASYNC);
+    auto deadline = std::chrono::steady_clock::now() + DURATION_ASYNC;
     int counter = 0;
     while (std::chrono::steady_clock::now() < deadline)
         for (auto cnt = 0; cnt < 10000; cnt++) sibling->send(AsyncMsg { ++counter, false });
@@ -70,7 +70,7 @@ void Task::doMixed()
 
 template <> void Task::onMessage(MixedBegin&)
 {
-    timerStart('A', std::chrono::seconds(DURATION_MIXED));
+    timerStart('A', DURATION_MIXED);
     doMixed();
 }
 
@@ -97,14 +97,14 @@ template <> void Task::onMessage(BreedExplode& msg)
     {
         for (auto i = 0; i < msg.amount; i++)
         {
-            auto child = Task::create(shared_from_this());
+            auto child = Task::create(weak_from_this().lock());
             child->send(BreedExplode { msg.amount, msg.generation+1, msg.maxGenerations });
             pendingChilds.insert(child); // keeps the child thread referenced (and alive)
         }
     }
     else // last generation: trigger the implosion
     {
-        ancestor->send(BreedImplode { shared_from_this(), 1 });
+        ancestor->send(BreedImplode { weak_from_this().lock(), 1 });
     }
 }
 
@@ -137,9 +137,9 @@ template <> void Task::onMessage(BreedImplode& msg)
     if (pendingChilds.empty())
     {
         if (ancestor)
-            ancestor->send(BreedImplode { shared_from_this(), 1 + implosions });
+            ancestor->send(BreedImplode { weak_from_this().lock(), 1 + implosions });
         else
-            app->send(BreedImplode { shared_from_this(), implosions }); // root thread
+            app->send(BreedImplode { weak_from_this().lock(), implosions }); // root thread
     }
 }
 
@@ -157,8 +157,8 @@ void Application::onStart()
 {
     std::cout << "testing performance..." << std::endl;
 
-    snd1 = Task::create(shared_from_this());
-    snd2 = Task::create(shared_from_this());
+    snd1 = Task::create(weak_from_this().lock());
+    snd2 = Task::create(weak_from_this().lock());
     snd1->send(snd2);
     snd2->send(snd1);
 
