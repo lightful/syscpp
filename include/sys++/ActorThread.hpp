@@ -55,13 +55,13 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
         template <bool HighPri = false, typename Any> inline void send(Any& msg) // polymorphic message passing
         {
-            auto tmp = typename std::remove_const<Any>::type(msg); // move a (non const) copy
+            auto tmp = typename std::decay<Any>::type(msg); // move a (non const) copy supporting arrays
             send(std::move(tmp));
         }
 
         template <bool HighPri = false, typename Any> inline void send(Any&& msg)
         {
-            post<ActorMessage<Any>, HighPri>(std::forward<Any>(msg)); // gratis rvalue
+            post<ActorMessage<Any>, HighPri>(std::move(msg)); // gratis rvalue
         }
 
         template <typename Any> using Channel = std::function<void(Any&)>;
@@ -79,7 +79,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
         template <typename Any> void connect(Channel<Any> receiver = Channel<Any>()) // bind (or unbind) a generic callback
         {
-            post<ActorCallback<Any>, true>(std::forward<Channel<Any>>(receiver));
+            post<ActorCallback<Any>, true>(std::move(receiver));
         }
 
         template <typename Any, bool HighPri = false, typename Him> void connect(const std::shared_ptr<Him>& receiver)
@@ -131,7 +131,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
     protected:
 
-        explicit ActorThread() : dispatching(true), externalDispatcher(false), detached(false), mboxPaused(false) {}
+        ActorThread() : dispatching(true), externalDispatcher(false), detached(false), exitCode(0), mboxPaused(false) {}
 
         virtual ~ActorThread() {} // messages pending to be dispatched are discarded
 
@@ -142,15 +142,15 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
         /* the active object may use this family of methods to perform the callbacks onto connected clients */
 
-        template <typename Any> inline static void publish(Any&& value)
+        template <typename Any> inline static void publish(Any&& msg)
         {
             auto& bearer = callback<Any>();
-            if (bearer) bearer(value); // if binded with getChannel() won't call a deleted peer
+            if (bearer) bearer(msg); // if binded with getChannel() won't call a deleted peer
         }
 
-        template <typename Any> inline static void publish(Any& value)
+        template <typename Any> inline static void publish(Any& msg)
         {
-            auto tmp = typename std::remove_const<Any>::type(value);
+            auto tmp = typename std::decay<Any>::type(msg);
             publish(std::move(tmp));
         }
 
@@ -172,7 +172,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
             auto pTimer = allTimersOfThatType.find(payload);
             if (pTimer == allTimersOfThatType.end())
             {
-                timer = std::make_shared<ActorAlarm<Any>>(std::forward<Channel<const Any>>(event), payload);
+                timer = std::make_shared<ActorAlarm<Any>>(std::move(event), payload);
                 allTimersOfThatType.emplace(timer->payload, timer);
             }
             else // reschedule and reprogram
@@ -191,7 +191,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
                                                 TimerCycle cycle = TimerCycle::OneShot)
         {
             Runnable* runnable = static_cast<Runnable*>(this); // safe (a dead 'this' will not dispatch timers)
-            timerStart(payload, lapse, Channel<const Any>([runnable](const Any& any) { runnable->onTimer(any); }), cycle);
+            timerStart(payload, lapse, Channel<const Any>([runnable](const Any& p) { runnable->onTimer(p); }), cycle);
         }
 
         template <typename Any> void timerReset(const Any& payload)
@@ -267,14 +267,14 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
         template <typename Any> struct ActorMessage : public ActorParcel // wraps any type
         {
-            ActorMessage(Any&& msg) : message(std::forward<Any>(msg)) {}
+            ActorMessage(Any&& msg) : message(std::move(msg)) {}
             void deliverTo(Runnable* instance) { instance->onMessage(message); }
             Any message;
         };
 
         template <typename Any> struct ActorCallback : public ActorParcel
         {
-            ActorCallback(Channel<Any>&& msg) : message(std::forward<Channel<Any>>(msg)) {}
+            ActorCallback(Channel<Any>&& msg) : message(std::move(msg)) {}
             void deliverTo(Runnable*) { callback<Any>() = std::move(message); }
             Channel<Any> message;
         };
@@ -303,7 +303,7 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
 
         template <typename Any> struct ActorAlarm : public ActorTimer
         {
-            ActorAlarm(Channel<const Any>&& fn, const Any& p) : event(std::forward<Channel<const Any>>(fn)), payload(p) {}
+            ActorAlarm(Channel<const Any>&& fn, const Any& p) : event(std::move(fn)), payload(p) {}
             void deliverTo(Runnable* instance)
             {
                 this->shoot = true;
@@ -391,7 +391,6 @@ template <typename Runnable> class ActorThread : public std::enable_shared_from_
         int dispatcher() // runs on the wrapped thread
         {
             id = std::this_thread::get_id();
-            exitCode = 0;
             Runnable* runnable = static_cast<Runnable*>(this);
             runnable->onStart();
             for (;;)
