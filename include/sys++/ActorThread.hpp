@@ -443,7 +443,7 @@ template <typename Runnable> class ActorThread
                     }
                     catch (const DispatchRetry& retry)
                     {
-                        auto event = Channel<const DispatchRetry>([this](const DispatchRetry& dr) { this->retryMbox(dr); });
+                        auto event = Channel<const DispatchRetry>([this](const DispatchRetry& dr) { retryMbox(dr); });
                         timerStart(retry, retry.retryInterval, std::move(event));
                         ulock.lock();
                         mboxPaused = true;
@@ -474,7 +474,7 @@ template <typename Runnable> class ActorThread
                     else // the other timers are scheduled even further
                     {
                         ulock.lock();
-                        if ((mboxPaused || (mboxNormPri.empty() && mboxHighPri.empty())) && dispatching)
+                        if (dispatching && mboxHighPri.empty() && (mboxNormPri.empty() || mboxPaused))
                         {
                             idleWaiter.notify_all();
                             if (externalDispatcher)

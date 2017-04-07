@@ -34,7 +34,7 @@ template <> void MyLib::onMessage(std::shared_ptr<RequestB>& msg)
     printer->send(LINE("<MyLib> received " << msg->data));
     auto reply = std::make_shared<ReplyB>("reply to " + msg->data);
     publish(std::move(reply)); // example invalidating 'reply'
-    if (reply) printer->send(LINE("<MyLib> no subscriptor to replies for " << msg->data));
+    if (reply) printer->send(LINE("<MyLib> no subscriber to replies for " << msg->data));
     bills->count++;
 }
 

@@ -75,6 +75,7 @@ struct String // a "namespace" not requiring a cpp nor inlining to avoid "unused
             if (trimmed) trim(item);
             result.emplace_back(item);
         }
+        if (str.length() && (str.back() == delimiter)) result.emplace_back(std::string());
     }
 };
 
