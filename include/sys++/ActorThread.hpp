@@ -426,7 +426,6 @@ template <typename Runnable> class ActorThread
                 bool hasHigh = !mboxHighPri.empty();
                 bool hasNorm = !mboxNormPri.empty();
                 bool isPaused = mboxPaused;
-                ulock.unlock();
 
                 if (!isPaused && (hasHigh || hasNorm)) // consume the messages queue
                 {
@@ -434,12 +433,12 @@ template <typename Runnable> class ActorThread
 
                     try
                     {
-                        auto& msg = mbox.front(); // queue iterator valid through insertions
+                        auto& msg = mbox.front(); // queue iterator valid through insertions (but thread-unsafe call)
+                        ulock.unlock();
                         msg->deliverTo(runnable);
                         msg.reset();              // delete the argument before getting the lock (prevent a self-lock
                         ulock.lock();             // if that object sends a message to this thread from its destructor)
                         mbox.pop_front();
-                        ulock.unlock();
                     }
                     catch (const DispatchRetry& retry)
                     {
@@ -447,10 +446,10 @@ template <typename Runnable> class ActorThread
                         timerStart(retry, retry.retryInterval, std::move(event));
                         ulock.lock();
                         mboxPaused = true;
-                        ulock.unlock();
                     }
                 }
 
+                ulock.unlock();
                 auto firstTimer = timers.cbegin();
                 if (firstTimer == timers.cend())
                 {
