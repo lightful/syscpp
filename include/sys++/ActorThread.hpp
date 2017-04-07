@@ -58,15 +58,9 @@ template <typename Runnable> class ActorThread
             return task->dispatcher();
         }
 
-        template <bool HighPri = false, typename Any> inline void send(Any& msg) // polymorphic message passing
+        template <bool HighPri = false, typename Any> inline void send(Any msg) // polymorphic message passing
         {
-            auto tmp = typename std::decay<Any>::type(msg); // move a (non const) copy supporting arrays
-            send(std::move(tmp));
-        }
-
-        template <bool HighPri = false, typename Any> inline void send(Any&& msg)
-        {
-            post<ActorMessage<Any>, HighPri>(std::move(msg)); // gratis rvalue
+            post<ActorMessage<Any>, HighPri>(std::move(msg)); // gratis rvalue onwards
         }
 
         template <typename Any> using Channel = std::function<void(Any&)>;
@@ -148,16 +142,10 @@ template <typename Runnable> class ActorThread
 
         /* the active object may use this family of methods to perform the callbacks onto connected clients */
 
-        template <typename Any> inline static void publish(Any&& msg)
+        template <typename Any> inline static void publish(Any msg)
         {
             auto& bearer = callback<Any>();
             if (bearer) bearer(msg); // if binded with getChannel() won't call a deleted peer
-        }
-
-        template <typename Any> inline static void publish(Any& msg)
-        {
-            auto tmp = typename std::decay<Any>::type(msg);
-            publish(std::move(tmp));
         }
 
         template <typename Any> static Channel<Any>& callback() // callback storage (per-thread and type)

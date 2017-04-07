@@ -12,10 +12,14 @@ wrapping a standard C++11 thread.
 
 ### Main features
 * Exchange messages of any type (does not requires them to derive from a common base class)
-* Messages are delivered in the order they arrive
+* Messages are asynchronously delivered in the same order they were sent
 * Allows to invoke callbacks on clients of unknown type (useful for libraries)
 * Callbacks on the active object *auto-store themselves* with no boilerplate code
 * Timers ability with *client-driven handlers* (no need for handler&harr;object resolving maps)
+
+### Performance
+* Extensive internal use of move semantics supporting delivery of non-copiable objects 
+* Several million msg/sec between each two threads (both Linux and Windows) in ordinary hardware
 
 ### Robustness
 * The wrapped thread lifecycle overlaps and is driven by the object existence
@@ -24,13 +28,11 @@ wrapping a standard C++11 thread.
 * Nonetheless, callbacks onto already deleted active objects do not crash the application
 
 ### Minimum compiler required
-* Mininum gcc version supported is 4.9.0 (which fixed [#57172](https://gcc.gnu.org/bugzilla/show_bug.cgi?id=57172))
+* Mininum gcc version supported is 4.8.0 (which added the thread_local keyword)
 * Works with clang 3.3 and Visual Studio 2015 Update 3 (no previous versions tested on both)
 * Clean, standard C++11 (no conditional code, same implementation for all platforms)
 
 ### Example
-
-See the *examples* directory for more elaborated examples than this one:
 
 ```cpp
 // Linux:    g++ -std=c++11 -lpthread demo.cpp -o demo
@@ -99,3 +101,8 @@ int main()
     return Application::run(); // re-use existing thread
 }
 ```
+Despite received by reference, *a copy* of the original object is delivered to the destination thread.
+Alternatively, the carried object can be moved, which is the way to transfer non-copiable objects like a unique_ptr.
+Copying is highly efficient with pointers, but note that several threads must not concurrently access a unsafe pointed object.
+
+See the [*examples*](examples/ActorThread/) folder for more elaborated examples, including a library and its client using the callbacks mechanism.

@@ -52,7 +52,7 @@ template <> void Application::onMessage(std::shared_ptr<ReplyB>& msg)
     printer->send(LINE("<MyApp> received " << msg->data));
 }
 
-template <> void Application::onMessage(const std::shared_ptr<Billing>& msg)
+template <> void Application::onMessage(std::shared_ptr<Billing>& msg)
 {
     printer->send(LINE("<MyApp> owes " << msg->count << " bills"));
 }
