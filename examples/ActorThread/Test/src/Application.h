@@ -25,6 +25,10 @@ struct B {};
 struct MixedEnd {};
 struct MixedStats { int sntA, sntB, recvA, recvB; };
 
+struct MpscBegin { int id; };
+struct Mpsc { int id; int counter; };
+struct MpscEnd { int id; };
+
 struct BreedExplode { int amount; int generation; int maxGenerations; };
 struct BreedImplode { std::shared_ptr<class Task> child; int implosions; };
 
@@ -79,6 +83,10 @@ class Application : public ActorThread<Application>
 
     std::chrono::steady_clock::time_point tStart;
     int repliesCount;
+
+    int count_mpsc1, count_mpsc2, count_mpsc1_lap, count_mpsc2_lap;
+    double mpsc_elapsed_lap, mpsc_elapsed_sc1, mpsc_elapsed_sc2;
+    bool crazyScheduler;
 };
 
 #endif /* APPLICATION_H */
