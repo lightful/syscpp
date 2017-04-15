@@ -389,6 +389,7 @@ template <typename Runnable> class ActorThread
             runnable->onStart();
             for (;;)
             {
+                burst = 0;
                 auto status = eventsLoop();
                 if (!std::get<0>(status)) break; // dispatching == false
                 runnable->onDispatching();
@@ -434,6 +435,12 @@ template <typename Runnable> class ActorThread
                         timerStart(retry, retry.retryInterval, std::move(event));
                         ulock.lock();
                         mboxPaused = true;
+                    }
+
+                    if (externalDispatcher && ((++burst % 64) == 0)) // do not monopolize the CPU on this dispatcher
+                    {
+                        runnable->onWaitingEvents(); // queue a resume request
+                        break;
                     }
                 }
 
@@ -499,6 +506,7 @@ template <typename Runnable> class ActorThread
         std::deque<std::unique_ptr<ActorParcel>> mboxNormPri;
         std::deque<std::unique_ptr<ActorParcel>> mboxHighPri;
         bool mboxPaused;
+        uint16_t burst;
         std::set<std::shared_ptr<ActorTimer>, ActorPointedKeyComparator<ActorTimer>> timers; // ordered by deadline
 };
 
