@@ -24,13 +24,12 @@
 #include <utility>
 #include <cstddef>
 #include <type_traits>
-#include <tuple>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <atomic>
 #include <chrono>
 #include <stdexcept>
-#include <deque>
 #include <set>
 #include <map>
 
@@ -89,7 +88,6 @@ template <typename Runnable> class ActorThread
 
         std::size_t pendingMessages() const // amount of undispatched messages in the active object
         {
-            std::lock_guard<std::mutex> ulock(mtx);
             return mboxNormPri.size() + mboxHighPri.size();
         }
 
@@ -108,7 +106,6 @@ template <typename Runnable> class ActorThread
 
         bool exiting() const // mostly to allow active objects running intensive jobs to poll for a shutdown request
         {
-            std::lock_guard<std::mutex> ulock(mtx);
             return !dispatching;
         }
 
@@ -242,8 +239,8 @@ template <typename Runnable> class ActorThread
         void handleActorEvents() // this must be invoked from the external dispatcher as specified above
         {
             auto status = eventsLoop();
-            if (std::get<1>(status))
-                static_cast<Runnable*>(this)->onWaitingTimer(std::get<2>(status));
+            if (status.first)
+                static_cast<Runnable*>(this)->onWaitingTimer(status.second);
             else
                 static_cast<Runnable*>(this)->onWaitingTimerCancel();
         }
@@ -253,7 +250,64 @@ template <typename Runnable> class ActorThread
         ActorThread& operator=(const ActorThread&) = delete;
         ActorThread(const ActorThread&) = delete;
 
-        struct ActorParcel
+        template <typename Item> class ActorQueue // FIFO (based on the MPSC queue at https://github.com/mstump/queues)
+        {
+            template <typename T> using Aligned = typename std::aligned_storage<sizeof(T),std::alignment_of<T>::value>::type;
+
+            public:
+
+                struct Linked { std::atomic<Item*> next; };
+
+                ActorQueue() : head(reinterpret_cast<Item*>(new Aligned<Item>)), // dummy transient placeholder
+                               tail(head.load(std::memory_order_relaxed)),
+                               count(0)
+                {
+                    head.load(std::memory_order_relaxed)->next.store(nullptr, std::memory_order_relaxed);
+                }
+
+                void clear() { while (front()) pop_front(); }
+
+                ~ActorQueue()
+                {
+                    clear();
+                    ::operator delete(head.load(std::memory_order_relaxed)); // also suitable for a dummy instance
+                }
+
+                template <typename Linkable> std::size_t emplace_back(Linkable* item) // e.g. any type derived from 'Linked'
+                {
+                    item->next.store(nullptr, std::memory_order_relaxed);
+                    Item* back = head.exchange(item, std::memory_order_acq_rel);
+                    back->next.store(item, std::memory_order_release);
+                    return count.fetch_add(1, std::memory_order_release); // amount of queued items minus 1
+                }
+
+                inline Item* front() // returns nullptr if empty
+                {
+                    return tail.load(std::memory_order_relaxed)->next.load(std::memory_order_acquire);
+                }
+
+                inline void pop_front() // also destroys and ultimately deletes the item
+                {
+                    count.fetch_sub(1, std::memory_order_release);
+                    Item* top = tail.load(std::memory_order_relaxed);
+                    Item* item = top->next.load(std::memory_order_acquire);
+                    tail.store(item, std::memory_order_release);
+                    item->~Item(); // (atomic destructor is trivial) memory deletion is actually deferred one step behind
+                    ::operator delete(top); // delete the *previous* item memory no longer needed
+                }
+
+                inline std::size_t size() const { return count.load(std::memory_order_acquire); }
+
+                inline bool empty() const { return !size(); }
+
+            private:
+
+                std::atomic<Item*> head; // the stored objects hold the linked list pointers (single memory allocation)
+                std::atomic<Item*> tail;
+                std::atomic<std::size_t> count;
+        };
+
+        struct ActorParcel : public ActorQueue<ActorParcel>::Linked
         {
             virtual ~ActorParcel() {}
             virtual void deliverTo(Runnable* instance) = 0;
@@ -372,12 +426,11 @@ template <typename Runnable> class ActorThread
         template <typename Parcelable, bool HighPri, typename Any> void post(Any&& msg) // runs on the calling thread
         {
             auto& mbox = HighPri? mboxHighPri : mboxNormPri;
-            std::lock_guard<std::mutex> lock(mtx);
             if (!dispatching) return; // don't store anything in a frozen queue
-            bool isIdle = mbox.empty();
-            mbox.emplace_back(new Parcelable(std::forward<Any>(msg)));
+            bool isIdle = !mbox.emplace_back(new Parcelable(std::forward<Any>(msg)));
             if (HighPri) mboxPaused = false;
             if (!isIdle) return;
+            std::lock_guard<std::mutex> lock(mtx);
             messageWaiter.notify_one();
             static_cast<Runnable*>(this)->onWaitingEvents();
         }
@@ -390,10 +443,9 @@ template <typename Runnable> class ActorThread
             for (;;)
             {
                 burst = 0;
-                auto status = eventsLoop();
-                if (!std::get<0>(status)) break; // dispatching == false
+                eventsLoop();
+                if (!dispatching) break;
                 runnable->onDispatching();
-                std::lock_guard<std::mutex> lock(mtx);
                 externalDispatcher = false;
             }
             runnable->onStop();
@@ -404,13 +456,13 @@ template <typename Runnable> class ActorThread
 
         void retryMbox(const DispatchRetry&) { mboxPaused = false; }
 
-        std::tuple<bool, bool, TimerClock::duration> eventsLoop()
+        std::pair<bool, TimerClock::duration> eventsLoop()
         {
             bool haveTimerLapse = false;
             TimerClock::duration timerLapse;
             Runnable* runnable = static_cast<Runnable*>(this);
-            std::unique_lock<std::mutex> ulock(mtx);
-            while (dispatching)
+            bool mustDispatch = true;
+            while (dispatching && mustDispatch)
             {
                 bool hasHigh = !mboxHighPri.empty();
                 bool hasNorm = !mboxNormPri.empty();
@@ -419,36 +471,35 @@ template <typename Runnable> class ActorThread
                 if (!isPaused && (hasHigh || hasNorm)) // consume the messages queue
                 {
                     auto& mbox = hasHigh? mboxHighPri : mboxNormPri;
-
                     try
                     {
-                        auto& msg = mbox.front(); // queue iterator valid through insertions (but thread-unsafe call)
-                        ulock.unlock();
-                        msg->deliverTo(runnable);
-                        msg.reset();              // delete the argument before getting the lock (prevent a self-lock
-                        ulock.lock();             // if that object sends a message to this thread from its destructor)
-                        mbox.pop_front();
+                        while (ActorParcel* msg = mbox.front())
+                        {
+                            msg->deliverTo(runnable);
+                            mbox.pop_front();
+                            if ((++burst % 16) == 0)
+                            {
+                                if (externalDispatcher) // do not monopolize the CPU on this dispatcher
+                                {
+                                    runnable->onWaitingEvents(); // queue a resume request
+                                    mustDispatch = false;
+                                }
+                                break; // keep an eye on the timers
+                            }
+                        }
                     }
                     catch (const DispatchRetry& retry)
                     {
                         auto event = Channel<const DispatchRetry>([this](const DispatchRetry& dr) { retryMbox(dr); });
                         timerStart(retry, retry.retryInterval, std::move(event));
-                        ulock.lock();
                         mboxPaused = true;
-                    }
-
-                    if (externalDispatcher && ((++burst % 64) == 0)) // do not monopolize the CPU on this dispatcher
-                    {
-                        runnable->onWaitingEvents(); // queue a resume request
-                        break;
                     }
                 }
 
-                ulock.unlock();
                 auto firstTimer = timers.cbegin();
                 if (firstTimer == timers.cend())
                 {
-                    ulock.lock();
+                    std::unique_lock<std::mutex> ulock(mtx);
                     if (mboxNormPri.empty() && mboxHighPri.empty() && dispatching)
                     {
                         idleWaiter.notify_all();
@@ -463,11 +514,10 @@ template <typename Runnable> class ActorThread
                     {
                         auto timerEvent = *firstTimer; // this shared_ptr keeps it alive when self-removed from the set
                         timerEvent->deliverTo(runnable); // here it could be self-removed (timerStop)
-                        ulock.lock();
                     }
                     else // the other timers are scheduled even further
                     {
-                        ulock.lock();
+                        std::unique_lock<std::mutex> ulock(mtx);
                         if (dispatching && mboxHighPri.empty() && (mboxNormPri.empty() || mboxPaused))
                         {
                             idleWaiter.notify_all();
@@ -482,7 +532,7 @@ template <typename Runnable> class ActorThread
                     }
                 }
             }
-            return std::make_tuple(dispatching, haveTimerLapse, timerLapse); // take advantage of the acquired lock
+            return std::make_pair(haveTimerLapse, timerLapse);
         }
 
         template <typename Key> struct ActorPointedKeyComparator
@@ -493,9 +543,9 @@ template <typename Runnable> class ActorThread
             }
         };
 
-        bool dispatching;
-        bool externalDispatcher;
-        bool detached;
+        std::atomic<bool> dispatching;
+        std::atomic<bool> externalDispatcher;
+        std::atomic<bool> detached;
         mutable std::weak_ptr<Runnable> weak_this;
         std::thread runner;
         std::thread::id id;
@@ -503,9 +553,9 @@ template <typename Runnable> class ActorThread
         mutable std::mutex mtx;
         std::condition_variable messageWaiter;
         std::condition_variable idleWaiter;
-        std::deque<std::unique_ptr<ActorParcel>> mboxNormPri;
-        std::deque<std::unique_ptr<ActorParcel>> mboxHighPri;
-        bool mboxPaused;
+        ActorQueue<ActorParcel> mboxNormPri;
+        ActorQueue<ActorParcel> mboxHighPri;
+        std::atomic<bool> mboxPaused;
         uint16_t burst;
         std::set<std::shared_ptr<ActorTimer>, ActorPointedKeyComparator<ActorTimer>> timers; // ordered by deadline
 };
