@@ -237,6 +237,8 @@ template <> void Application::onMessage(Mpsc& msg)
         repliesCount++;
         if (repliesCount == 2) // end of 0P1C phase?
         {
+            auto per_second_produced_2p1c = (count_mpsc1 + count_mpsc2) / mpsc_elapsed_lap;
+            auto per_second_consumed_2p1c = (count_mpsc1_lap + count_mpsc2_lap) / mpsc_elapsed_lap;
             auto sc1 = count_mpsc1 - count_mpsc1_lap;
             auto sc2 = count_mpsc2 - count_mpsc2_lap;
             auto elapsed_sc_avg = (mpsc_elapsed_sc1 + mpsc_elapsed_sc2) / 2;
@@ -251,12 +253,14 @@ template <> void Application::onMessage(Mpsc& msg)
 
             crazyScheduler = (min_msgs < 100) || (max_ratio > 50);
 
-            std::cout << (count_mpsc1 + count_mpsc2) / mpsc_elapsed_lap << " msg/sec produced ("
-                      << count_mpsc1 / mpsc_elapsed_lap << " + " << count_mpsc2 / mpsc_elapsed_lap << ") 2P1C test in "
-                      << mpsc_elapsed_lap << " seconds" << std::endl;
-            std::cout << (count_mpsc1_lap + count_mpsc2_lap) / mpsc_elapsed_lap << " msg/sec consumed ("
-                      << count_mpsc1_lap / mpsc_elapsed_lap << " + " << count_mpsc2_lap / mpsc_elapsed_lap << ") 2P1C test "
-                      << "[max ratio: " << max_ratio << "]" << std::endl;
+            std::cout << per_second_produced_2p1c << " msg/sec produced ("
+                      << count_mpsc1 / mpsc_elapsed_lap << " + " << count_mpsc2 / mpsc_elapsed_lap
+                      << ") 2P1C test in " << mpsc_elapsed_lap << " seconds" << std::endl;
+            std::cout << per_second_consumed_2p1c << " msg/sec consumed ("
+                      << count_mpsc1_lap / mpsc_elapsed_lap << " + " << count_mpsc2_lap / mpsc_elapsed_lap
+                      << ") 2P1C test in " << mpsc_elapsed_lap << " seconds" << std::endl;
+            std::cout << (per_second_produced_2p1c + per_second_consumed_2p1c) / 3 << " msg/sec throughput "
+                      << "per thread 2P1C test (priority inversion hint: " << max_ratio << ")" << std::endl;
             std::cout << (sc1 + sc2) / elapsed_sc_avg << " msg/sec consumed ("
                       << sc1 / mpsc_elapsed_sc1 << " + " << sc2 / mpsc_elapsed_sc2 << ") 0P1C test in "
                       << elapsed_sc_avg << " seconds" << std::endl;
