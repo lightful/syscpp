@@ -253,11 +253,15 @@ template <typename Runnable> class ActorThread
         ActorThread& operator=(const ActorThread&) = delete;
         ActorThread(const ActorThread&) = delete;
 
+    protected:
+
         struct ActorParcel
         {
             virtual ~ActorParcel() {}
             virtual void deliverTo(Runnable* instance) = 0;
         };
+
+    private:
 
         template <typename Any> struct ActorMessage : public ActorParcel // wraps any type
         {
@@ -369,6 +373,8 @@ template <typename Runnable> class ActorThread
         }
         catch (...) { return false; }
 
+    protected:
+
         template <typename Parcelable, bool HighPri, typename Any> void post(Any&& msg) // runs on the calling thread
         {
             auto& mbox = HighPri? mboxHighPri : mboxNormPri;
@@ -381,6 +387,8 @@ template <typename Runnable> class ActorThread
             messageWaiter.notify_one();
             static_cast<Runnable*>(this)->onWaitingEvents();
         }
+
+    private:
 
         int dispatcher() // runs on the wrapped thread
         {
