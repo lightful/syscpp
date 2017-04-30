@@ -260,9 +260,11 @@ template <typename Runnable> class ActorThread
 
                 ActorQueue() : head(reinterpret_cast<Item*>(new Aligned<Item>)), // dummy transient placeholder
                                tail(head.load(std::memory_order_relaxed)),
-                               count(0)
+                               count(0),
+                               lastFront(nullptr),
+                               prevFront(tail.load(std::memory_order_relaxed))
                 {
-                    head.load(std::memory_order_relaxed)->next.store(nullptr, std::memory_order_relaxed);
+                    prevFront->next.store(nullptr, std::memory_order_relaxed);
                 }
 
                 void clear() { while (front()) pop_front(); }
@@ -273,7 +275,7 @@ template <typename Runnable> class ActorThread
                     ::operator delete(head.load(std::memory_order_relaxed)); // also suitable for a dummy instance
                 }
 
-                template <typename Linkable> std::size_t emplace_back(Linkable* item) // e.g. any type derived from 'Linked'
+                template <typename Linkable> std::size_t push_back(Linkable* item) // e.g. any type derived from 'Linked'
                 {
                     item->next.store(nullptr, std::memory_order_relaxed);
                     Item* back = head.exchange(item, std::memory_order_acq_rel);
@@ -281,19 +283,18 @@ template <typename Runnable> class ActorThread
                     return count.fetch_add(1, std::memory_order_release); // amount of queued items minus 1
                 }
 
-                inline Item* front() // returns nullptr if empty
+                inline Item* front() // returns nullptr if empty (must be always invoked just before pop_front())
                 {
-                    return tail.load(std::memory_order_relaxed)->next.load(std::memory_order_acquire);
+                    return lastFront = prevFront->next.load(std::memory_order_acquire);
                 }
 
-                inline void pop_front() // also destroys and ultimately deletes the item
+                void pop_front() // also destroys and ultimately deletes the item
                 {
                     count.fetch_sub(1, std::memory_order_release);
-                    Item* top = tail.load(std::memory_order_relaxed);
-                    Item* item = top->next.load(std::memory_order_acquire);
-                    tail.store(item, std::memory_order_release);
-                    item->~Item(); // (atomic destructor is trivial) memory deletion is actually deferred one step behind
-                    ::operator delete(top); // delete the *previous* item memory no longer needed
+                    tail.store(lastFront, std::memory_order_release);
+                    lastFront->~Item(); // (atomic destructor is trivial) memory deletion is actually deferred one step behind
+                    ::operator delete(prevFront); // delete the *previous* item memory no longer needed
+                    prevFront = lastFront;
                 }
 
                 inline std::size_t size() const { return count.load(std::memory_order_acquire); }
@@ -305,6 +306,8 @@ template <typename Runnable> class ActorThread
                 std::atomic<Item*> head; // the stored objects hold the linked list pointers (single memory allocation)
                 std::atomic<Item*> tail;
                 std::atomic<std::size_t> count;
+                Item* lastFront;
+                Item* prevFront;
         };
 
         struct ActorParcel : public ActorQueue<ActorParcel>::Linked
@@ -427,7 +430,7 @@ template <typename Runnable> class ActorThread
         {
             auto& mbox = HighPri? mboxHighPri : mboxNormPri;
             if (!dispatching) return; // don't store anything in a frozen queue
-            bool isIdle = !mbox.emplace_back(new Parcelable(std::forward<Any>(msg)));
+            bool isIdle = mbox.push_back(new Parcelable(std::forward<Any>(msg))) == 0;
             if (HighPri) mboxPaused = false;
             if (!isIdle) return;
             std::lock_guard<std::mutex> lock(mtx);
@@ -466,9 +469,8 @@ template <typename Runnable> class ActorThread
             {
                 bool hasHigh = !mboxHighPri.empty();
                 bool hasNorm = !mboxNormPri.empty();
-                bool isPaused = mboxPaused;
 
-                if (!isPaused && (hasHigh || hasNorm)) // consume the messages queue
+                if (!mboxPaused && (hasHigh || hasNorm)) // consume the messages queue
                 {
                     auto& mbox = hasHigh? mboxHighPri : mboxNormPri;
                     try
@@ -477,7 +479,7 @@ template <typename Runnable> class ActorThread
                         {
                             msg->deliverTo(runnable);
                             mbox.pop_front();
-                            if ((++burst % 16) == 0)
+                            if ((++burst % 64) == 0)
                             {
                                 if (externalDispatcher) // do not monopolize the CPU on this dispatcher
                                 {
