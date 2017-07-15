@@ -440,9 +440,9 @@ template <typename Runnable> class ActorThread
             if (!dispatching) return; // don't store anything in a frozen queue
             bool isIdle = mbox.push_back(new Parcelable(std::forward<Any>(msg))) == 0;
             if (HighPri) mboxPaused = false;
-            if (!isIdle) return;
-            std::lock_guard<std::mutex> lock(mtx);
-            messageWaiter.notify_one();
+            if (!isIdle) return; // if the consumer has pending messages (e.g. under high load) this method returns here
+            std::lock_guard<std::mutex> lock(mtx); // under high load is only acquired in eventsLoop() (no effective lock)
+            messageWaiter.notify_one(); // wakeup the consumer thread
             static_cast<Runnable*>(this)->onWaitingEvents();
         }
 
@@ -511,7 +511,7 @@ template <typename Runnable> class ActorThread
                 auto firstTimer = timers.cbegin();
                 if (firstTimer == timers.cend())
                 {
-                    std::unique_lock<std::mutex> ulock(mtx);
+                    std::unique_lock<std::mutex> ulock(mtx); // lock required *here* to overcome the sleeping barber problem
                     if (mboxNormPri.empty() && mboxHighPri.empty() && dispatching)
                     {
                         idleWaiter.notify_all();
@@ -529,7 +529,7 @@ template <typename Runnable> class ActorThread
                     }
                     else // the other timers are scheduled even further
                     {
-                        std::unique_lock<std::mutex> ulock(mtx);
+                        std::unique_lock<std::mutex> ulock(mtx); // prevent sleeping barber problem
                         if (dispatching && mboxHighPri.empty() && (mboxNormPri.empty() || mboxPaused))
                         {
                             idleWaiter.notify_all();
