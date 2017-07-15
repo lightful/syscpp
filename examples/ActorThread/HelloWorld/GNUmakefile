@@ -1,9 +1,9 @@
 ifeq ($(DEBUG), 1)
     BUILD_DIR := debug
-    CXXFLAGS  += -O0 -g3 -Wno-misleading-indentation -Wno-unknown-warning-option
+    CXXFLAGS  := -O0 -g3 $(CXXFLAGS)
 else
     BUILD_DIR := release
-    CXXFLAGS  += -O2
+    CXXFLAGS  := -O2 $(CXXFLAGS)
 endif
 
 PATH_BIN  := $(BUILD_DIR)/application

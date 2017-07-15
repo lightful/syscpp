@@ -12,41 +12,46 @@
 #include <algorithm>
 #include <sstream>
 
+#ifndef VA_STR
 #define VA_STR(x) static_cast<std::ostringstream&>(std::ostringstream().flush() << x).str()
+#endif
 
 struct String // a "namespace" not requiring a cpp nor inlining to avoid "unused function" warnings
 {
-    static std::string& tolower(std::string& str)
+    static void tolower(std::string& str)
     {
         std::transform(str.begin(), str.end(), str.begin(), ::tolower);
-        return str;
     }
 
-    static std::string& toupper(std::string& str)
+    static void toupper(std::string& str)
     {
         std::transform(str.begin(), str.end(), str.begin(), ::toupper);
-        return str;
     }
 
-    static std::string& ltrim(std::string& str)
+    static void ltrim(std::string& str)
     {
         std::string::iterator i = str.begin();
         while (i != str.end()) if (!std::isspace(*i)) break; else ++i;
         str.erase(str.begin(), i);
-        return str;
     }
 
-    static std::string& rtrim(std::string& str)
+    static void rtrim(std::string& str)
     {
         std::string::iterator i = str.end();
         while (i != str.begin()) if (!std::isspace(*(--i))) { ++i; break; }
         str.erase(i, str.end());
-        return str;
     }
 
-    static std::string& trim(std::string& str)
+    static void trim(std::string& str)
     {
-        return ltrim(rtrim(str));
+        rtrim(str);
+        ltrim(str);
+    }
+
+    static std::string trimmed(std::string str)
+    {
+        trim(str);
+        return str;
     }
 
     static std::string right(const std::string& str, std::string::size_type count)
@@ -54,7 +59,7 @@ struct String // a "namespace" not requiring a cpp nor inlining to avoid "unused
         return str.substr(str.size() - std::min(count, str.size()));
     }
 
-    static std::string& replaceAll(std::string& str, const std::string& sWhat, const std::string& sWith)
+    static void replaceAll(std::string& str, const std::string& sWhat, const std::string& sWith)
     {
         std::string::size_type lookHere = 0;
         std::string::size_type foundHere;
@@ -63,7 +68,6 @@ struct String // a "namespace" not requiring a cpp nor inlining to avoid "unused
             str.replace(foundHere, sWhat.size(), sWith);
             lookHere = foundHere + sWith.size();
         }
-        return str;
     }
 
     template <typename T> static void split(const std::string& str, const char delimiter, T& result, bool trimmed = true)

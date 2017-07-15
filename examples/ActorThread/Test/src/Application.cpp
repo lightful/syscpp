@@ -243,8 +243,7 @@ template <> void Application::onMessage(Mpsc& msg)
             auto sc2 = count_mpsc2 - count_mpsc2_lap;
             auto elapsed_sc_avg = (mpsc_elapsed_sc1 + mpsc_elapsed_sc2) / 2;
 
-            double min_msgs = std::min(std::min(std::min(std::min(std::min(
-                              count_mpsc1, count_mpsc2), count_mpsc1_lap), count_mpsc2_lap), sc1), sc2);
+            double min_msgs = std::min(std::min(std::min(count_mpsc1, count_mpsc2), count_mpsc1_lap), count_mpsc2_lap);
 
             double r_2p1c_p = 1.0 * std::max(count_mpsc1, count_mpsc2) / std::min(count_mpsc1, count_mpsc2);
             double r_2p1c_c = 1.0 * std::max(count_mpsc1_lap, count_mpsc2_lap) / std::min(count_mpsc1_lap, count_mpsc2_lap);

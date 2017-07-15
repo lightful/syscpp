@@ -40,11 +40,14 @@ WARNFLAGS ?= -Wall -Wextra -pedantic -Wconversion -Wsign-conversion -Wsign-promo
              -Wpointer-arith -Wnon-virtual-dtor -Woverloaded-virtual -Wshadow -Wundef -Wmissing-include-dirs
 
 CXXFLAGS += $(ARCHFLAGS) $(WARNFLAGS)
-INCLUDES += $(foreach dir,$(SUBPRJS),-I$(dir)/include)
-LIBS     += $(foreach dir,$(SUBPRJS),$(wildcard $(dir)/$(BUILD_DIR)/*.a))
+
+CXXFLAGS := $(filter-out $(SKIPFLAGS), $(CXXFLAGS))  # allow skipping particular warnings
+
+INCLUDES := $(foreach dir,$(SUBPRJS),-I$(dir)/include) $(INCLUDES)
+LIBS     := $(foreach dir,$(SUBPRJS),$(wildcard $(dir)/$(BUILD_DIR)/*.a)) $(LIBS)
 
 ifdef OUT_LIB
-INCLUDES += -Iinclude
+INCLUDES := -Iinclude $(INCLUDES)
 endif
 
 ifndef MK_NOHL

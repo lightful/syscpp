@@ -140,6 +140,8 @@ template <typename Runnable> class ActorThread
         void onStart() {}
         void onStop() {}
 
+        std::thread::id threadID() const { return id; }
+
         /* the active object may use this family of methods to perform the callbacks onto connected clients */
 
         template <typename Any> inline static void publish(Any msg)
