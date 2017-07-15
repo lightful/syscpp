@@ -71,7 +71,7 @@ template <typename Runnable> class ActorThread
             {                                                            // in std::function (and a shared_ptr
                 auto aliveTarget = weakBind.lock();                      // would prevent objects destruction)
                 if (aliveTarget)
-                    aliveTarget->template send<HighPri>(std::move(data));
+                    std::static_pointer_cast<Runnable>(aliveTarget)->template send<HighPri>(std::move(data));
             });
         }
 
