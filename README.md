@@ -18,6 +18,7 @@ wrapping a standard C++11 thread.
 * Timers ability with *client-driven handlers* (no need for handler&harr;object resolving maps)
 
 ### Performance
+* Internal lock-free MPSC messages queue
 * Extensive internal use of move semantics supporting delivery of non-copiable objects 
 * Several million msg/sec between each two threads (both Linux and Windows) in ordinary hardware
 
